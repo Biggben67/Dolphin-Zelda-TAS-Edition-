@@ -62,7 +62,7 @@ static float DrawMessage(int index, Message& msg, const ImVec2& position, int ti
   const std::string window_name = fmt::format("osd_{}", index);
 
   // The size must be reset, otherwise the length of old messages could influence new ones.
-  ImGui::SetNextWindowPos(position);
+  ImGui::SetNextWindowPos(position, ImGuiCond_Always, ImVec2(1.0f, 0.0f));
   ImGui::SetNextWindowSize(ImVec2(0.0f, 0.0f));
 
   // Gradually fade old messages away (except in their first frame)
@@ -107,9 +107,10 @@ void AddMessage(std::string message, u32 ms, u32 argb)
 void DrawMessages()
 {
   const bool draw_messages = Config::Get(Config::MAIN_OSD_MESSAGES);
+  const ImGuiIO& io = ImGui::GetIO();
   const float current_x =
-      LEFT_MARGIN * ImGui::GetIO().DisplayFramebufferScale.x + s_obscured_pixels_left;
-  float current_y = TOP_MARGIN * ImGui::GetIO().DisplayFramebufferScale.y + s_obscured_pixels_top;
+      io.DisplaySize.x - LEFT_MARGIN * io.DisplayFramebufferScale.x - s_obscured_pixels_left;
+  float current_y = TOP_MARGIN * io.DisplayFramebufferScale.y + s_obscured_pixels_top;
   int index = 0;
 
   std::lock_guard lock{s_messages_mutex};
