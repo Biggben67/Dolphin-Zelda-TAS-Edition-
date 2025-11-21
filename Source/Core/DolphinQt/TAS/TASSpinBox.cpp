@@ -4,6 +4,7 @@
 #include "DolphinQt/TAS/TASSpinBox.h"
 
 #include "DolphinQt/QtUtils/QueueOnObject.h"
+#include "Core/HotkeyManager.h"
 
 TASSpinBox::TASSpinBox(QWidget* parent) : QSpinBox(parent)
 {
@@ -29,4 +30,16 @@ void TASSpinBox::OnUIValueChanged(int new_value)
 void TASSpinBox::ApplyControllerValueChange()
 {
   setValue(m_state.ApplyControllerValueChange());
+}
+
+void TASSpinBox::focusInEvent(QFocusEvent* event)
+{
+  QSpinBox::focusInEvent(event);
+  HotkeyManagerEmu::SetStateHotkeysBlocked(true);
+}
+
+void TASSpinBox::focusOutEvent(QFocusEvent* event)
+{
+  QSpinBox::focusOutEvent(event);
+  HotkeyManagerEmu::SetStateHotkeysBlocked(false);
 }

@@ -20,6 +20,10 @@ public:
   // Must be called from the CPU thread
   void OnControllerValueChanged(int new_value);
 
+protected:
+  void focusInEvent(QFocusEvent* event) override;
+  void focusOutEvent(QFocusEvent* event) override;
+
 private slots:
   void OnUIValueChanged(int new_value);
   void ApplyControllerValueChange();

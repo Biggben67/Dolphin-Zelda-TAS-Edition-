@@ -255,4 +255,6 @@ void GetStatus(bool ignore_focus);
 bool IsEnabled();
 void Enable(bool enable_toggle);
 bool IsPressed(int Id, bool held);
+// block save/load-related hotkeys (used by TAS input)
+void SetStateHotkeysBlocked(bool blocked);
 }  // namespace HotkeyManagerEmu

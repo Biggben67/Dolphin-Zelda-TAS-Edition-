@@ -28,7 +28,7 @@ void StickWidget::SetX(u16 x)
 {
   m_x = std::min(m_max_x, x);
   update();
-  emit ChangedX(x);
+  emit ChangedX(m_x);
 }
 
 void StickWidget::SetY(u16 y)
@@ -36,7 +36,7 @@ void StickWidget::SetY(u16 y)
   m_y = std::min(m_max_y, y);
 
   update();
-  emit ChangedY(y);
+  emit ChangedY(m_y);
 }
 
 void StickWidget::SetAxisLines(bool toggle)

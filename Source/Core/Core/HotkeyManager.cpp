@@ -206,7 +206,7 @@ namespace HotkeyManagerEmu
 static std::array<u32, NUM_HOTKEY_GROUPS> s_hotkey_down;
 static HotkeyStatus s_hotkey;
 static bool s_enabled;
-
+static bool s_block_state_hotkeys = false;
 static InputConfig s_config("Hotkeys", _trans("Hotkeys"), "Hotkeys");
 
 InputConfig* GetConfig()
@@ -232,6 +232,12 @@ void Enable(bool enable_toggle)
 
 bool IsPressed(int id, bool held)
 {
+  // block all state hotkeys while TAS text input is active
+  if (s_block_state_hotkeys && id >= HK_LOAD_STATE_SLOT_1 && id <= HK_DECREMENT_SELECTED_STATE_SLOT)
+  {
+    return false;
+  }
+
   unsigned int group = static_cast<HotkeyManager*>(s_config.GetController(0))->FindGroupByID(id);
   unsigned int group_key =
       static_cast<HotkeyManager*>(s_config.GetController(0))->GetIndexForGroup(group, id);
@@ -248,6 +254,11 @@ bool IsPressed(int id, bool held)
   }
 
   return false;
+}
+
+void SetStateHotkeysBlocked(bool blocked)
+{
+  s_block_state_hotkeys = blocked;
 }
 
 // This function exists to load the old "Keys" group so pre-existing configs don't break.
