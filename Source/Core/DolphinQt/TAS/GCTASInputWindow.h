@@ -16,9 +16,11 @@ class GCTASInputWindow : public TASInputWindow
   Q_OBJECT
 public:
   explicit GCTASInputWindow(QWidget* parent, int controller_id);
-
+  ~GCTASInputWindow();
   void hideEvent(QHideEvent* event) override;
   void showEvent(QShowEvent* event) override;
+  static GCTASInputWindow* GetInstanceForController(int controller_id);
+  void ApplyEssPreset(int preset_index);
 
 private:
   void CreateTriggersBox();

@@ -38,6 +38,7 @@
 #endif
 #include "DolphinQt/QtUtils/QueueOnObject.h"
 #include "DolphinQt/Settings.h"
+#include "DolphinQt/TAS/GCTASInputWindow.h"
 
 #include "InputCommon/ControlReference/ControlReference.h"
 #include "InputCommon/ControllerInterface/ControllerInterface.h"
@@ -554,6 +555,7 @@ void HotkeyScheduler::Run()
       }
 
       CheckGBAHotkeys();
+      CheckTasEssHotkeys();
     }
 
     const auto stereo_depth = Config::Get(Config::GFX_STEREO_DEPTH);
@@ -679,4 +681,34 @@ void HotkeyScheduler::CheckGBAHotkeys()
   if (IsHotkey(HK_GBA_4X))
     QueueOnObject(gba_widget, [gba_widget] { gba_widget->Resize(4); });
 #endif
+}
+
+void HotkeyScheduler::CheckTasEssHotkeys()
+{
+  // We’re targeting controller 1 (index 0)
+  GCTASInputWindow* tas = GCTASInputWindow::GetInstanceForController(0);
+  if (!tas)
+    return;
+
+  auto queue_preset = [tas](Hotkey hk, int preset_index) {
+    if (IsHotkey(hk))
+    {
+      // Run ApplyEssPreset on the GUI thread, like CheckGBAHotkeys does
+      QueueOnObject(tas, [tas, preset_index] {
+        // tas might have been closed between queuing and execution
+        if (tas)
+          tas->ApplyEssPreset(preset_index);
+      });
+    }
+  };
+
+  queue_preset(HK_TAS_MAIN_STICK_ESS_UP_LEFT, 0);
+  queue_preset(HK_TAS_MAIN_STICK_ESS_UP, 1);
+  queue_preset(HK_TAS_MAIN_STICK_ESS_UP_RIGHT, 2);
+  queue_preset(HK_TAS_MAIN_STICK_ESS_LEFT, 3);
+  queue_preset(HK_TAS_MAIN_STICK_ESS_CENTER, 4);
+  queue_preset(HK_TAS_MAIN_STICK_ESS_RIGHT, 5);
+  queue_preset(HK_TAS_MAIN_STICK_ESS_DOWN_LEFT, 6);
+  queue_preset(HK_TAS_MAIN_STICK_ESS_DOWN, 7);
+  queue_preset(HK_TAS_MAIN_STICK_ESS_DOWN_RIGHT, 8);
 }

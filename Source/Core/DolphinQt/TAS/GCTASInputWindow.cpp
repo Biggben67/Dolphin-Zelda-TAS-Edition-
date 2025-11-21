@@ -23,10 +23,40 @@
 
 #include "InputCommon/ControllerEmu/ControllerEmu.h"
 #include "InputCommon/InputConfig.h"
+#include <Core/HotkeyManager.h>
+
+namespace
+{
+  struct MainStickPreset
+  {
+    int x;
+    int y;
+  };
+
+  // ESS Positions
+  // Order: Q, W, E, A, S, D, Z, X, C in grid layout.
+  constexpr MainStickPreset s_main_stick_presets[] = {
+      {111, 145},  // Q - up left
+      {128, 146},  // W - up
+      {145, 145},  // E - up-right
+      {110, 128},  // A - left
+      {128, 128},  // S - center
+      {146, 128},  // D - right
+      {111, 111},  // Z - down-left
+      {128, 110},  // X - down
+      {145, 111},  // C - down-right
+  };
+
+  GCTASInputWindow* s_gc_tas_windows[4] = {nullptr, nullptr, nullptr, nullptr};
+}  // anonymous namespace
 
 GCTASInputWindow::GCTASInputWindow(QWidget* parent, int controller_id)
     : TASInputWindow(parent), m_controller_id(controller_id)
 {
+  // Register this instance for global hotkeys.
+  if (m_controller_id >= 0 && m_controller_id < 4)
+    s_gc_tas_windows[m_controller_id] = this;
+
   setWindowTitle(tr("GameCube TAS Input %1").arg(controller_id + 1));
 
   m_main_stick_box = CreateStickInputs(tr("Main Stick"), GCPad::MAIN_STICK_GROUP, &m_overrider, 1,
@@ -66,6 +96,14 @@ GCTASInputWindow::GCTASInputWindow(QWidget* parent, int controller_id)
 
   //setup Shift+QWE / ASD / ZXC main stick presets
   SetupMainStickHotkeys();
+}
+
+GCTASInputWindow::~GCTASInputWindow()
+{
+  if (m_controller_id >= 0 && m_controller_id < 4 && s_gc_tas_windows[m_controller_id] == this)
+  {
+    s_gc_tas_windows[m_controller_id] = nullptr;
+  }
 }
 
 void GCTASInputWindow::CreateTriggersBox()
@@ -143,28 +181,6 @@ void GCTASInputWindow::CreateButtonsBox()
   m_buttons_box->setLayout(combined_layout);
 }
 
-namespace
-{
-  struct MainStickPreset
-  {
-    int x;
-    int y;
-  };
-
-  // ESS Positions
-  // Order: Q, W, E, A, S, D, Z, X, C in grid layout.
-  constexpr MainStickPreset s_main_stick_presets[] = {
-      {111, 145},  // Q - up left
-      {128, 146},  // W - up
-      {145, 145},  // E - up-right
-      {110, 128},  // A - left
-      {128, 128},  // S - center
-      {146, 128},  // D - right
-      {111, 111},   // Z - down-left
-      {128, 110},   // X - down
-      {145, 111},   // C - down-right
-  };
-}  // anonymous namespace
 
 void GCTASInputWindow::SetupMainStickHotkeys()
 {
@@ -187,6 +203,36 @@ void GCTASInputWindow::SetupMainStickHotkeys()
     connect(shortcut, &QShortcut::activated, this,
             [this, index = map.preset_index] { ApplyMainStickPreset(index); });
   }
+}
+
+GCTASInputWindow* GCTASInputWindow::GetInstanceForController(int controller_id)
+{
+  if (controller_id < 0 || controller_id >= 4)
+    return nullptr;
+  return s_gc_tas_windows[controller_id];
+}
+
+void GCTASInputWindow::ApplyEssPreset(int preset_index)
+{
+  if (!m_main_stick_box)
+    return;
+
+  if (preset_index < 0 || preset_index >= static_cast<int>(sizeof(s_main_stick_presets) /
+                                                           sizeof(s_main_stick_presets[0])))
+  {
+    return;
+  }
+
+  StickWidget* stick_widget = m_main_stick_box->GetStickWidget();
+  if (!stick_widget)
+    return;
+
+  const MainStickPreset& preset = s_main_stick_presets[preset_index];
+
+  // Assuming you updated StickWidget::SetX/SetY to emit ChangedX/ChangedY
+  // as we discussed earlier, just call SetX/SetY:
+  stick_widget->SetX(preset.x);
+  stick_widget->SetY(preset.y);
 }
 
 void GCTASInputWindow::ApplyMainStickPreset(int preset_index)
