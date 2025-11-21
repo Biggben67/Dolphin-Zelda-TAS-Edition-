@@ -27,8 +27,8 @@ StickWidget::StickWidget(QWidget* parent, u16 max_x, u16 max_y)
 void StickWidget::SetX(u16 x)
 {
   m_x = std::min(m_max_x, x);
-
   update();
+  emit ChangedX(x);
 }
 
 void StickWidget::SetY(u16 y)
@@ -36,6 +36,7 @@ void StickWidget::SetY(u16 y)
   m_y = std::min(m_max_y, y);
 
   update();
+  emit ChangedY(y);
 }
 
 void StickWidget::SetAxisLines(bool toggle)
@@ -93,77 +94,7 @@ void StickWidget::mouseMoveEvent(QMouseEvent* event)
   if (!m_ignore_movement)
     handleMouseEvent(event);
 }
-void StickWidget::keyReleaseEvent(QKeyEvent* event)
-{
-  // ESS Positions -- TODO (set as configurable hotkeys?)
-  bool changed = false;
-  if (event->modifiers() == Qt::ShiftModifier)  // Require Shift
-  {
-    switch (event->key())
-    {
-    // Top row: Q W E
-    case Qt::Key_Q:
-      m_x = 111;
-      m_y = 145;
-      changed = true;
-      break;
-    case Qt::Key_W:
-      m_x = 128;
-      m_y = 146;
-      changed = true;
-      break;
-    case Qt::Key_E:
-      m_x = 145;
-      m_y = 145;
-      changed = true;
-      break;
 
-    // Middle row: A S D
-    case Qt::Key_A:
-      m_x = 110;
-      m_y = 128;
-      changed = true;
-      break;
-    case Qt::Key_S:
-      m_x = 128;
-      m_y = 128;
-      changed = true;
-      break;
-    case Qt::Key_D:
-      m_x = 146;
-      m_y = 128;
-      changed = true;
-      break;
-
-    // Bottom row: Z X C
-    case Qt::Key_Z:
-      m_x = 111;
-      m_y = 111;
-      changed = true;
-      break;
-    case Qt::Key_X:
-      m_x = 128;
-      m_y = 110;
-      changed = true;
-      break;
-    case Qt::Key_C:
-      m_x = 145;
-      m_y = 111;
-      changed = true;
-      break;
-
-    default:
-      break;
-    }
-  }
-
-  emit ChangedX(m_x);
-  emit ChangedY(m_y);
-  if (changed)
-  {
-    update();
-  }
-}
 void StickWidget::handleMouseEvent(QMouseEvent* event)
 {
   u16 prev_x = m_x;

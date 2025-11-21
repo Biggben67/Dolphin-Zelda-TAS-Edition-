@@ -24,6 +24,10 @@ private:
   void CreateTriggersBox();
   void CreateButtonsBox();
 
+  // main stick hotkeys
+  void SetupMainStickHotkeys();
+  void ApplyMainStickPreset(int preset_index);
+
   int m_controller_id;
 
   InputOverrider m_overrider;

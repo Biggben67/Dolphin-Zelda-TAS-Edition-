@@ -69,13 +69,13 @@ TASInputWindow::TASInputWindow(QWidget* parent) : QDialog(parent)
 
   QLabel* turbo_press_label = new QLabel(tr("Press:"));
   m_turbo_press_frames = new QSpinBox();
-  m_turbo_press_frames->setMinimum(1);
+  m_turbo_press_frames->setMinimum(2);  // Default to 2: TWW needs this to be 2 for turbo to actually work
   turbo_layout->addWidget(turbo_press_label, 0, 0);
   turbo_layout->addWidget(m_turbo_press_frames, 0, 1);
 
   QLabel* turbo_release_label = new QLabel(tr("Release:"));
   m_turbo_release_frames = new QSpinBox();
-  m_turbo_release_frames->setMinimum(1);
+  m_turbo_release_frames->setMinimum(2);  // Default to 2: TWW needs this to be 2 for turbo to actually work
 
   turbo_layout->addWidget(turbo_release_label, 1, 0);
   turbo_layout->addWidget(m_turbo_release_frames, 1, 1);

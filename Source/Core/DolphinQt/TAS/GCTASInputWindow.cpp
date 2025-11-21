@@ -10,7 +10,8 @@
 #include <QSpacerItem>
 #include <QSpinBox>
 #include <QVBoxLayout>
-
+#include <QShortcut>
+#include <QKeySequence> 
 #include "Common/CommonTypes.h"
 
 #include "Core/HW/GCPad.h"
@@ -62,6 +63,9 @@ GCTASInputWindow::GCTASInputWindow(QWidget* parent, int controller_id)
           &StickWidget::SetAxisLines);
   connect(m_toggle_lines, &QCheckBox::toggled, m_c_stick_box->GetStickWidget(),
           &StickWidget::SetAxisLines);
+
+  //setup Shift+QWE / ASD / ZXC main stick presets
+  SetupMainStickHotkeys();
 }
 
 void GCTASInputWindow::CreateTriggersBox()
@@ -139,6 +143,73 @@ void GCTASInputWindow::CreateButtonsBox()
   m_buttons_box->setLayout(combined_layout);
 }
 
+namespace
+{
+  struct MainStickPreset
+  {
+    int x;
+    int y;
+  };
+
+  // ESS Positions
+  // Order: Q, W, E, A, S, D, Z, X, C in grid layout.
+  constexpr MainStickPreset s_main_stick_presets[] = {
+      {111, 145},  // Q - up left
+      {128, 146},  // W - up
+      {145, 145},  // E - up-right
+      {110, 128},  // A - left
+      {128, 128},  // S - center
+      {146, 128},  // D - right
+      {111, 111},   // Z - down-left
+      {128, 110},   // X - down
+      {145, 111},   // C - down-right
+  };
+}  // anonymous namespace
+
+void GCTASInputWindow::SetupMainStickHotkeys()
+{
+  struct KeyMapping
+  {
+    Qt::Key key;
+    int preset_index;
+  };
+
+  // Grid layout: QWE / ASD / ZXC
+  const KeyMapping mappings[] = {
+      {Qt::Key_Q, 0}, {Qt::Key_W, 1}, {Qt::Key_E, 2}, {Qt::Key_A, 3}, {Qt::Key_S, 4},
+      {Qt::Key_D, 5}, {Qt::Key_Z, 6}, {Qt::Key_X, 7}, {Qt::Key_C, 8},
+  };
+
+  for (const KeyMapping& map : mappings)
+  {
+    auto* shortcut = new QShortcut(QKeySequence(Qt::SHIFT | map.key), this);
+    shortcut->setContext(Qt::WidgetWithChildrenShortcut);
+    connect(shortcut, &QShortcut::activated, this,
+            [this, index = map.preset_index] { ApplyMainStickPreset(index); });
+  }
+}
+
+void GCTASInputWindow::ApplyMainStickPreset(int preset_index)
+{
+  if (!m_main_stick_box)
+    return;
+
+  if (preset_index < 0 || preset_index >= static_cast<int>(sizeof(s_main_stick_presets) /
+                                                           sizeof(s_main_stick_presets[0])))
+  {
+    return;
+  }
+
+  const MainStickPreset& preset = s_main_stick_presets[preset_index];
+
+  StickWidget* stick_widget = m_main_stick_box->GetStickWidget();
+  if (!stick_widget)
+    return;
+
+  // These will update the visual stick widget; via the existing connections,
+  stick_widget->SetX(preset.x);
+  stick_widget->SetY(preset.y);
+}
 void GCTASInputWindow::hideEvent(QHideEvent* event)
 {
   Pad::GetConfig()->GetController(m_controller_id)->ClearInputOverrideFunction();
