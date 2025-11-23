@@ -86,6 +86,12 @@ TASInputWindow::TASInputWindow(QWidget* parent) : QDialog(parent)
   m_settings_box->setLayout(settings_layout);
 
   installEventFilter(this);
+
+  // Install event filter on this window and all child widgets so we can
+  // react to clicks anywhere in the TAS dialog.
+  const auto children = findChildren<QWidget*>();
+  for (QWidget* child : children)
+    child->installEventFilter(this);
 }
 
 int TASInputWindow::GetTurboPressFrames() const
@@ -293,16 +299,35 @@ std::optional<ControlState> TASInputWindow::GetSpinBox(TASSpinBox* spin, int zer
 
 bool TASInputWindow::eventFilter(QObject* object, QEvent* event)
 {
+  // track when the TAS window has full focus
   if (event->type() == QEvent::WindowActivate)
   {
     Host::GetInstance()->SetTASInputFullFocus(true);
     return true;
   }
-    
   else if (event->type() == QEvent::WindowDeactivate)
   {
     Host::GetInstance()->SetTASInputFullFocus(false);
     return true;
+  }
+
+  // clicking anywhere inside the TAS window that is not a TASSpinBox
+  // will clear focus from a TASSpinBox, if one currently has it.
+  if (event->type() == QEvent::MouseButtonPress)
+  {
+    QWidget* target = qobject_cast<QWidget*>(object);
+    if (target)
+    {
+      QWidget* current_focus = focusWidget();
+      if (auto* focused_spin = qobject_cast<TASSpinBox*>(current_focus))
+      {
+        // Only clear focus if we clicked something other than another TASSpinBox
+        if (!qobject_cast<TASSpinBox*>(target))
+        {
+          focused_spin->clearFocus();
+        }
+      }
+    }
   }
 
   return QDialog::eventFilter(object, event);
