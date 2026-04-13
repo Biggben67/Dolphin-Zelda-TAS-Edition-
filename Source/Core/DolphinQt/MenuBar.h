@@ -102,6 +102,9 @@ signals:
   void ShowWiiSpeakWindow();
   void ShowLogitechMicWindow();
   void ConnectWiiRemote(int id);
+  void WindowPresetsSave();
+  void WindowPresetsLoad();
+  void WindowPresetsAutoLoad();
 
 #ifdef USE_RETRO_ACHIEVEMENTS
   void ShowAchievementsWindow();
@@ -130,6 +133,7 @@ signals:
   void StopRecording();
   void ExportRecording();
   void ShowTASInput();
+  void ShowDTMEditor();
 
   void SelectionChanged(std::shared_ptr<const UICommon::GameFile> game_file);
   void RecordingStatusChanged(bool recording);
@@ -259,6 +263,7 @@ private:
   QAction* m_recording_stop;
   QAction* m_recording_read_only;
   QAction* m_movie_window;
+  QAction* m_dtm_editor;
 
   // Options
   QAction* m_boot_to_pause;

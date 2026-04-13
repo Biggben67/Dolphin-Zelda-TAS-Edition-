@@ -7,6 +7,7 @@
 #include "Common/CommonTypes.h"
 #include "Common/Logging/Log.h"
 #include "Common/MsgHandler.h"
+#include "Core/API/Controller.h"
 #include "Core/Config/MainSettings.h"
 #include "Core/CoreTiming.h"
 #include "Core/HW/GCPad.h"
@@ -118,6 +119,7 @@ int CSIDevice_GCController::RunBuffer(u8* buffer, int request_length)
 void CSIDevice_GCController::HandleMoviePadStatus(Movie::MovieManager& movie, int device_number,
                                                   GCPadStatus* pad_status)
 {
+  API::GetGCManip().PerformInputManip(pad_status, device_number);
   movie.SetPolledDevice();
   if (NetPlay_GetInput(device_number, pad_status))
   {

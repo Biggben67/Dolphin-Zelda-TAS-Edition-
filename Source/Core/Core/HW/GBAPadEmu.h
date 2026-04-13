@@ -34,6 +34,8 @@ public:
   ControllerEmu::ControlGroup* GetGroup(GBAPadGroup group) const;
 
   void LoadDefaults(const ControllerInterface& ciface) override;
+  void SetForceDisconnectOverride(bool enabled);
+  bool GetForceDisconnectOverride() const;
 
   static constexpr const char* BUTTONS_GROUP = _trans("Buttons");
   static constexpr const char* DPAD_GROUP = _trans("D-Pad");
@@ -49,6 +51,7 @@ private:
   ControllerEmu::Buttons* m_buttons;
   ControllerEmu::Buttons* m_dpad;
   bool m_reset_pending;
+  bool m_force_disconnect_override = false;
 
   const unsigned int m_index;
 };

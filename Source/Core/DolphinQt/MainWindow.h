@@ -28,6 +28,7 @@ class BreakpointWidget;
 struct BootParameters;
 class CheatsManager;
 class CodeWidget;
+class DTMEditorDialog;
 class DiscordHandler;
 class DragEnterEvent;
 class FreeLookWindow;
@@ -50,6 +51,7 @@ class RenderWidget;
 class SearchBar;
 class SettingsWindow;
 class SkylanderPortalWindow;
+class ScriptingWidget;
 class ThreadWidget;
 class ToolBar;
 class WatchWidget;
@@ -210,7 +212,14 @@ private:
   void OnActivateChat();
   void OnRequestGolfControl();
   void ShowTASInput();
+  void ShowDTMEditor();
   void ShowOSDWindow();
+  void SaveWindowPreset();
+  void LoadWindowPreset();
+  void ConfigureAutoWindowPreset();
+  void ApplyWindowPreset(const QString& preset_name, bool warn_if_missing);
+  void AutoLoadWindowPreset(const BootParameters& parameters);
+  QString GetAutoWindowPresetName(const BootParameters& parameters) const;
 
   void ChangeDisc();
   void EjectDisc();
@@ -257,8 +266,10 @@ private:
   InfinityBaseWindow* m_infinity_window = nullptr;
   WiiSpeakWindow* m_wii_speak_window = nullptr;
   LogitechMicWindow* m_logitech_mic_window = nullptr;
+  QString m_last_window_preset_name;
   MappingWindow* m_hotkey_window = nullptr;
   FreeLookWindow* m_freelook_window = nullptr;
+  DTMEditorDialog* m_dtm_editor = nullptr;
 
   HotkeyScheduler* m_hotkey_scheduler;
   NetPlayDialog* m_netplay_dialog;
@@ -285,6 +296,7 @@ private:
   MemoryWidget* m_memory_widget;
   NetworkWidget* m_network_widget;
   RegisterWidget* m_register_widget;
+  ScriptingWidget* m_scripting_widget;
   ThreadWidget* m_thread_widget;
   WatchWidget* m_watch_widget;
   CheatsManager* m_cheats_manager{};

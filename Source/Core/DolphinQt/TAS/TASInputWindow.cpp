@@ -9,14 +9,18 @@
 #include <QApplication>
 #include <QCheckBox>
 #include <QEvent>
+#include <QGridLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QShortcut>
 #include <QSlider>
-#include <QSpinBox>
+#include <QTimer>
 #include <QVBoxLayout>
 
+#include "Core/Config/MainSettings.h"
+#include "Core/Core.h"
+#include "Core/System.h"
 #include "DolphinQt/Host.h"
 #include "DolphinQt/QtUtils/AspectRatioWidget.h"
 #include "DolphinQt/Resources.h"
@@ -54,20 +58,36 @@ TASInputWindow::TASInputWindow(QWidget* parent) : QDialog(parent)
                                   "random. In some cases this can be fixed by adding a deadzone."));
   settings_layout->addWidget(m_use_controller, 0, 0, 1, 2);
 
-  QLabel* turbo_press_label = new QLabel(tr("Duration of Turbo Button Press (frames):"));
-  m_turbo_press_frames = new QSpinBox();
-  m_turbo_press_frames->setMinimum(1);
-  settings_layout->addWidget(turbo_press_label, 1, 0);
-  settings_layout->addWidget(m_turbo_press_frames, 1, 1);
+  m_toggle_lines = new QCheckBox(tr("Enable Axis Lines"));
+  m_toggle_lines->setChecked(true);
+  settings_layout->addWidget(m_toggle_lines, 1, 0, 1, 2);
 
-  QLabel* turbo_release_label = new QLabel(tr("Duration of Turbo Button Release (frames):"));
-  m_turbo_release_frames = new QSpinBox();
-  m_turbo_release_frames->setMinimum(1);
-  settings_layout->addWidget(turbo_release_label, 2, 0);
-  settings_layout->addWidget(m_turbo_release_frames, 2, 1);
+  auto* turbo_box = new QGroupBox(tr("Turbo"));
+  settings_layout->addWidget(turbo_box, 2, 0, 1, 2);
+
+  auto* turbo_layout = new QGridLayout;
+  auto* turbo_press_label = new QLabel(tr("Press:"));
+  m_turbo_press_frames = new TASSpinBox(turbo_box);
+  m_turbo_press_frames->setMinimum(2);
+  m_turbo_press_frames->setValue(2);
+  turbo_layout->addWidget(turbo_press_label, 0, 0);
+  turbo_layout->addWidget(m_turbo_press_frames, 0, 1);
+
+  auto* turbo_release_label = new QLabel(tr("Release:"));
+  m_turbo_release_frames = new TASSpinBox(turbo_box);
+  m_turbo_release_frames->setMinimum(2);
+  m_turbo_release_frames->setValue(2);
+  turbo_layout->addWidget(turbo_release_label, 1, 0);
+  turbo_layout->addWidget(m_turbo_release_frames, 1, 1);
+  turbo_box->setLayout(turbo_layout);
 
   m_settings_box = new QGroupBox(tr("Settings"));
   m_settings_box->setLayout(settings_layout);
+
+  m_view_inputs_timer = new QTimer(this);
+  m_view_inputs_timer->setInterval(16);
+  connect(m_view_inputs_timer, &QTimer::timeout, this, &TASInputWindow::PollViewInputs);
+  m_view_inputs_timer->start();
 }
 
 int TASInputWindow::GetTurboPressFrames() const
@@ -95,7 +115,9 @@ TASCheckBox* TASInputWindow::CreateButton(const QString& text, std::string_view 
 QGroupBox* TASInputWindow::CreateStickInputs(const QString& text, std::string_view group_name,
                                              InputOverrider* overrider, int min_x, int min_y,
                                              int max_x, int max_y, Qt::Key x_shortcut_key,
-                                             Qt::Key y_shortcut_key)
+                                             Qt::Key y_shortcut_key, TASSpinBox** x_value_out,
+                                             TASSpinBox** y_value_out,
+                                             StickWidget** stick_widget_out)
 {
   const QKeySequence x_shortcut_key_sequence = QKeySequence(Qt::ALT | x_shortcut_key);
   const QKeySequence y_shortcut_key_sequence = QKeySequence(Qt::ALT | y_shortcut_key);
@@ -137,6 +159,13 @@ QGroupBox* TASInputWindow::CreateStickInputs(const QString& text, std::string_vi
   layout->addLayout(visual_layout);
   box->setLayout(layout);
 
+  if (x_value_out)
+    *x_value_out = x_value;
+  if (y_value_out)
+    *y_value_out = y_value;
+  if (stick_widget_out)
+    *stick_widget_out = visual;
+
   overrider->AddFunction(group_name, ControllerEmu::ReshapableInput::X_INPUT_OVERRIDE,
                          [this, x_value, x_default, min_x, max_x](ControlState controller_state) {
                            return GetSpinBox(x_value, x_default, min_x, max_x, controller_state);
@@ -153,7 +182,7 @@ QGroupBox* TASInputWindow::CreateStickInputs(const QString& text, std::string_vi
 QBoxLayout* TASInputWindow::CreateSliderValuePairLayout(
     const QString& text, std::string_view group_name, std::string_view control_name,
     InputOverrider* overrider, int zero, int default_, int min, int max, Qt::Key shortcut_key,
-    QWidget* shortcut_widget, std::optional<ControlState> scale)
+    QWidget* shortcut_widget, std::optional<ControlState> scale, TASSpinBox** value_out)
 {
   const QKeySequence shortcut_key_sequence = QKeySequence(Qt::ALT | shortcut_key);
 
@@ -163,8 +192,11 @@ QBoxLayout* TASInputWindow::CreateSliderValuePairLayout(
   QBoxLayout* layout = new QHBoxLayout;
   layout->addWidget(label);
 
-  CreateSliderValuePair(group_name, control_name, overrider, layout, zero, default_, min, max,
-                        shortcut_key_sequence, Qt::Horizontal, shortcut_widget, scale);
+  auto* value = CreateSliderValuePair(group_name, control_name, overrider, layout, zero, default_,
+                                      min, max, shortcut_key_sequence, Qt::Horizontal,
+                                      shortcut_widget, scale);
+  if (value_out)
+    *value_out = value;
 
   return layout;
 }
@@ -277,4 +309,16 @@ void TASInputWindow::changeEvent(QEvent* const event)
     Host::GetInstance()->SetTASInputFocus(active_window_is_tas_input);
   }
   QDialog::changeEvent(event);
+}
+
+void TASInputWindow::PollViewInputs()
+{
+  if (!isVisible() || !Config::Get(Config::MAIN_MOVIE_VIEW_TAS_INPUTS))
+    return;
+
+  const auto state = Core::GetState(Core::System::GetInstance());
+  if (state != Core::State::Running && state != Core::State::Paused)
+    return;
+
+  UpdateLiveInputDisplay();
 }

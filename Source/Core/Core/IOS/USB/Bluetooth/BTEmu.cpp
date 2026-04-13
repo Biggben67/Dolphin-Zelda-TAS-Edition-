@@ -11,6 +11,7 @@
 #include "Common/Assert.h"
 #include "Common/Logging/Log.h"
 #include "Common/MsgHandler.h"
+#include "Core/API/Controller.h"
 #include "Core/Core.h"
 #include "Core/CoreTiming.h"
 #include "Core/Debugger/Debugger_SymbolMap.h"
@@ -387,6 +388,7 @@ void BluetoothEmuDevice::Update()
         continue;
 
       movie.PlayWiimote(i, &wiimote_states[i]);
+      API::ApplyManipToDesiredWiimoteState(i, &wiimote_states[i]);
       movie.CheckWiimoteStatus(i, wiimote_states[i]);
     }
 

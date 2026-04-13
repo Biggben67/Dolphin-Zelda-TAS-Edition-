@@ -21,6 +21,7 @@
 #include "Core/Core.h"
 #include "Core/Debugger/PPCDebugInterface.h"
 #include "Core/Host.h"
+#include "Core/Movie.h"
 #include "Core/NetPlayProto.h"
 #include "Core/State.h"
 #include "Core/System.h"
@@ -42,7 +43,12 @@
 
 Host::Host()
 {
-  State::SetOnAfterLoadCallback([] { Host_UpdateDisasmDialog(); });
+  State::SetOnAfterLoadCallback([] {
+    Host_UpdateDisasmDialog();
+    Core::System::GetInstance().GetMovie().OnAfterStateLoad();
+    if (g_presenter)
+      g_presenter->SetMousePress(0);
+  });
 }
 
 Host::~Host()

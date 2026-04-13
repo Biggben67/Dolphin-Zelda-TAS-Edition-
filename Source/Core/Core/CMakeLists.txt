@@ -640,6 +640,19 @@ elseif(_M_ARM_64)
   )
 endif()
 
+target_sources(core PRIVATE
+  API/Controller.cpp
+  API/Controller.h
+  API/Events.cpp
+  API/Events.h
+  API/Gui.cpp
+  API/Gui.h
+  API/Memory.cpp
+  API/Memory.h
+  API/Registers.cpp
+  API/Registers.h
+)
+
 target_link_libraries(core
 PUBLIC
   audiocommon
@@ -647,10 +660,12 @@ PUBLIC
   discio
   enet::enet
   expr
+  imgui
   inputcommon
   MbedTLS::mbedtls
   pugixml
   RangeSet::RangeSet
+  scripting
   sfml-network
   videonull
   videoogl

@@ -8,19 +8,25 @@
 class QGroupBox;
 class QHideEvent;
 class QShowEvent;
-class QSpinBox;
 class TASCheckBox;
+class TASSpinBox;
 
 class GCTASInputWindow : public TASInputWindow
 {
   Q_OBJECT
 public:
   explicit GCTASInputWindow(QWidget* parent, int controller_id);
+  ~GCTASInputWindow() override;
+
+  static GCTASInputWindow* GetInstanceForController(int controller_id);
+  void ApplyEssPreset(int preset_index);
 
   void hideEvent(QHideEvent* event) override;
   void showEvent(QShowEvent* event) override;
 
 private:
+  void UpdateLiveInputDisplay() override;
+
   int m_controller_id;
 
   InputOverrider m_overrider;
@@ -37,6 +43,12 @@ private:
   TASCheckBox* m_up_button;
   TASCheckBox* m_down_button;
   TASCheckBox* m_right_button;
+  TASSpinBox* m_main_stick_x_value = nullptr;
+  TASSpinBox* m_main_stick_y_value = nullptr;
+  TASSpinBox* m_c_stick_x_value = nullptr;
+  TASSpinBox* m_c_stick_y_value = nullptr;
+  TASSpinBox* m_l_trigger_value = nullptr;
+  TASSpinBox* m_r_trigger_value = nullptr;
   QGroupBox* m_main_stick_box;
   QGroupBox* m_c_stick_box;
   QGroupBox* m_triggers_box;

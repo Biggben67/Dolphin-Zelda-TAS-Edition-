@@ -44,6 +44,8 @@
 #include "DolphinQt/Translation.h"
 #include "DolphinQt/Updater.h"
 
+#include "Scripting/ScriptList.h"
+#include "Scripting/ScriptingEngine.h"
 #include "UICommon/CommandLineParse.h"
 #include "UICommon/UICommon.h"
 
@@ -198,6 +200,8 @@ int main(int argc, char* argv[])
   {
     save_state_path = static_cast<const char*>(options.get("save_state"));
   }
+  if (options.get("no_python_subinterpreters"))
+    Scripting::ScriptingBackend::DisablePythonSubinterpreters();
 
   std::unique_ptr<BootParameters> boot;
   bool game_specified = false;
@@ -230,6 +234,8 @@ int main(int argc, char* argv[])
         args.front(), BootSessionData(save_state_path, DeleteSavestateAfterBoot::No));
     game_specified = true;
   }
+  if (options.is_set("script"))
+    Scripts::g_scripts[static_cast<const char*>(options.get("script"))] = nullptr;
 
   int retval;
 

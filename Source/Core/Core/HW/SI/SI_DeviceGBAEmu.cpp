@@ -47,6 +47,11 @@ CSIDevice_GBAEmu::~CSIDevice_GBAEmu()
   m_core.reset();
 }
 
+std::shared_ptr<HW::GBA::Core> CSIDevice_GBAEmu::GetCore() const
+{
+  return m_core;
+}
+
 int CSIDevice_GBAEmu::RunBuffer(u8* buffer, int request_length)
 {
   switch (m_next_action)
@@ -150,6 +155,9 @@ DataResponse CSIDevice_GBAEmu::GetData(u32& hi, u32& low)
   // Use X button as a reset signal for NetPlay/Movies
   if (pad_status.button & PadButton::PAD_BUTTON_X)
     m_core->Reset();
+
+  const bool y_down = (pad_status.button & PadButton::PAD_BUTTON_Y) != 0;
+  m_core->SetForceDisconnect(y_down);
 
   return DataResponse::NoData;
 }

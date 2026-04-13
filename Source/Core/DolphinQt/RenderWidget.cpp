@@ -17,6 +17,8 @@
 #include <QTimer>
 #include <QWindow>
 
+#include <limits>
+
 #include "Core/Config/MainSettings.h"
 #include "Core/Core.h"
 #include "Core/State.h"
@@ -360,6 +362,15 @@ bool RenderWidget::event(QEvent* event)
 {
   PassEventToPresenter(event);
 
+  const auto clear_presenter_mouse_state = [] {
+    if (!Core::IsRunning(Core::System::GetInstance()))
+      return;
+
+    constexpr float offscreen = -std::numeric_limits<float>::max();
+    g_presenter->SetMousePress(0);
+    g_presenter->SetMousePos(offscreen, offscreen);
+  };
+
   switch (event->type())
   {
   case QEvent::KeyPress:
@@ -377,6 +388,7 @@ bool RenderWidget::event(QEvent* event)
   }
   // Needed in case a new window open and it moves the mouse
   case QEvent::WindowBlocked:
+    clear_presenter_mouse_state();
     SetCursorLocked(false);
     break;
   case QEvent::MouseButtonPress:
@@ -444,6 +456,7 @@ bool RenderWidget::event(QEvent* event)
     emit FocusChanged(true);
     break;
   case QEvent::WindowDeactivate:
+    clear_presenter_mouse_state();
     SetCursorLocked(false);
 
     UpdateCursor();
@@ -462,6 +475,10 @@ bool RenderWidget::event(QEvent* event)
     }
 
     emit FocusChanged(false);
+    break;
+  case QEvent::Hide:
+  case QEvent::Leave:
+    clear_presenter_mouse_state();
     break;
   case QEvent::Move:
     SetCursorLocked(m_cursor_locked);

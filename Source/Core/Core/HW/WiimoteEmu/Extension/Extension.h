@@ -67,6 +67,8 @@ public:
 
   static constexpr int CALIBRATION_CHECKSUM_BYTES = 2;
 
+  const EncryptionKey& GetEncryptionKey() const { return ext_key; }
+
 #pragma pack(push, 1)
   struct Register
   {

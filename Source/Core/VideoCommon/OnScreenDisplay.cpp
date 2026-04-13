@@ -64,14 +64,16 @@ static ImVec4 ARGBToImVec4(const u32 argb)
                 static_cast<float>((argb >> 24) & 0xFF) / 255.0f);
 }
 
-static float DrawMessage(int index, Message& msg, const ImVec2& position, int time_left)
+static float DrawMessage(int index, Message& msg, const ImVec2& position, int time_left,
+                         bool align_right)
 {
   // We have to provide a window name, and these shouldn't be duplicated.
   // So instead, we generate a name based on the number of messages drawn.
   const std::string window_name = fmt::format("osd_{}", index);
 
   // The size must be reset, otherwise the length of old messages could influence new ones.
-  ImGui::SetNextWindowPos(position);
+  ImGui::SetNextWindowPos(position, ImGuiCond_Always, align_right ? ImVec2(1.0f, 0.0f) :
+                                                               ImVec2(0.0f, 0.0f));
   ImGui::SetNextWindowSize(ImVec2(0.0f, 0.0f));
 
   // Gradually fade old messages away (except in their first frame)
@@ -155,8 +157,12 @@ void AddMessage(std::string message, u32 ms, u32 argb,
 void DrawMessages()
 {
   const bool draw_messages = Config::Get(Config::MAIN_OSD_MESSAGES);
-  const float current_x =
-      LEFT_MARGIN * ImGui::GetIO().DisplayFramebufferScale.x + s_obscured_pixels_left;
+  const bool align_right = Config::Get(Config::MAIN_MOVIE_USE_LEGACY_INPUT_DISPLAY);
+  const float current_x = align_right ?
+                              ImGui::GetIO().DisplaySize.x -
+                                  (LEFT_MARGIN * ImGui::GetIO().DisplayFramebufferScale.x) :
+                              LEFT_MARGIN * ImGui::GetIO().DisplayFramebufferScale.x +
+                                  s_obscured_pixels_left;
   float current_y = TOP_MARGIN * ImGui::GetIO().DisplayFramebufferScale.y + s_obscured_pixels_top;
   int index = 0;
 
@@ -186,7 +192,8 @@ void DrawMessages()
     }
 
     if (draw_messages)
-      current_y += DrawMessage(index++, msg, ImVec2(current_x, current_y), time_left);
+      current_y += DrawMessage(index++, msg, ImVec2(current_x, current_y), time_left,
+                               align_right);
   }
 }
 

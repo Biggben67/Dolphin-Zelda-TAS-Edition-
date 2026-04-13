@@ -174,6 +174,10 @@ public:
   // Active extension number is exposed for TAS.
   ExtensionNumber GetActiveExtensionNumber() const;
   ControllerEmu::SubscribableSettingValue<bool>& GetMotionPlusSetting();
+  void SetTASBatteryOverride(std::optional<u8> value);
+  std::optional<u8> GetTASBatteryOverride() const;
+  double GetBatterySettingValue() const;
+  void SetBatterySettingValue(double value);
 
   static Common::Vec3
   OverrideVec3(const ControllerEmu::ControlGroup* control_group, Common::Vec3 vec,
@@ -308,6 +312,7 @@ private:
   ControllerEmu::SubscribableSettingValue<bool> m_motion_plus_setting;
   ControllerEmu::SettingValue<double> m_fov_x_setting;
   ControllerEmu::SettingValue<double> m_fov_y_setting;
+  std::optional<u8> m_tas_battery_override;
 
   SpeakerLogic m_speaker_logic;
   MotionPlus m_motion_plus;
@@ -336,6 +341,7 @@ private:
   ExtensionNumber m_active_extension;
 
   bool m_is_motion_plus_attached;
+  bool m_battery_input_override = false;
 
   bool m_eeprom_dirty = false;
   ReadRequest m_read_request;

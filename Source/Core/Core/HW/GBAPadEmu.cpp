@@ -78,6 +78,10 @@ GCPadStatus GBAPad::GetInput()
     pad.button |= PAD_BUTTON_X;
   m_reset_pending = false;
 
+  // Old fork compatibility: GBA disconnect through the Y bit in recorded input.
+  if (m_force_disconnect_override)
+    pad.button |= PAD_BUTTON_Y;
+
   return pad;
 }
 
@@ -85,6 +89,17 @@ void GBAPad::SetReset(bool reset)
 {
   const auto lock = GetStateLock();
   m_reset_pending = reset;
+}
+
+void GBAPad::SetForceDisconnectOverride(bool enabled)
+{
+  const auto lock = GetStateLock();
+  m_force_disconnect_override = enabled;
+}
+
+bool GBAPad::GetForceDisconnectOverride() const
+{
+  return m_force_disconnect_override;
 }
 
 void GBAPad::LoadDefaults(const ControllerInterface& ciface)

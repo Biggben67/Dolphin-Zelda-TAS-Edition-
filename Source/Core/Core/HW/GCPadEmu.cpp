@@ -164,6 +164,10 @@ GCPadStatus GCPad::GetInput() const
   m_triggers->GetState(&pad.button, trigger_bitmasks, triggers.data(), m_input_override_function);
   pad.triggerLeft = MapFloat<u8>(triggers[0], 0);
   pad.triggerRight = MapFloat<u8>(triggers[1], 0);
+  if (pad.button & PAD_TRIGGER_L)
+    pad.triggerLeft = 0xFF;
+  if (pad.button & PAD_TRIGGER_R)
+    pad.triggerRight = 0xFF;
 
   return pad;
 }

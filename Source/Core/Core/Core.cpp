@@ -72,6 +72,7 @@
 #include "Core/State.h"
 #include "Core/System.h"
 #include "Core/WiiRoot.h"
+#include "Scripting/ScriptList.h"
 
 #ifdef USE_MEMORYWATCHER
 #include "Core/MemoryWatcher.h"
@@ -282,6 +283,7 @@ void Stop(Core::System& system)  // - Hammertime!
   HostDispatchJobs(system);
 
   system.GetFifo().EmulatorState(false);
+  Scripts::StopAllScripts();
 
   INFO_LOG_FMT(CONSOLE, "Stop [Main Thread]\t\t---- Shutting down ----");
 
@@ -672,6 +674,7 @@ static void EmuThread(Core::System& system, std::unique_ptr<BootParameters> boot
   }
 
   UpdateTitle(system);
+  Scripts::StartPendingScripts();
 
   // Become the CPU thread.
   cpu_thread_func(system, savestate_path, delete_savestate);

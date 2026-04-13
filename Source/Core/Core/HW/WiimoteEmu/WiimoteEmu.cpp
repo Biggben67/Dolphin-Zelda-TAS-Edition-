@@ -19,6 +19,7 @@
 #include "Common/Logging/Log.h"
 #include "Common/MathUtil.h"
 
+#include "Core/API/Controller.h"
 #include "Core/Config/MainSettings.h"
 #include "Core/Core.h"
 #include "Core/HW/Wiimote.h"
@@ -188,6 +189,7 @@ void Wiimote::Reset()
   m_camera_logic.Reset();
 
   m_status = {};
+  m_battery_input_override = false;
 
   // A real wii remote does not normally send a status report on connection.
   // But if an extension is already attached it does send one.
@@ -522,6 +524,9 @@ void Wiimote::BuildDesiredWiimoteState(DesiredWiimoteState* target_state,
   else
     target_state->motion_plus = std::nullopt;
 
+  target_state->battery = static_cast<u8>(
+      std::clamp<int>(static_cast<int>(std::lround(m_battery_setting.GetValue())), 0, 100));
+
   // Build Extension state.
   // This also allows the extension to perform any regular duties it may need.
   // (e.g. Nunchuk motion simulation step)
@@ -550,20 +555,47 @@ void Wiimote::PrepareInput(WiimoteEmu::DesiredWiimoteState* target_state,
 
 void Wiimote::Update(const WiimoteEmu::DesiredWiimoteState& target_state)
 {
+  DesiredWiimoteState manipulated_state = target_state;
+
+  if (std::holds_alternative<Nunchuk::DataFormat>(target_state.extension.data))
+  {
+    API::GetNunchuckButtonsManip().SetRaw(m_index,
+                                          std::get<Nunchuk::DataFormat>(target_state.extension.data));
+  }
+
+  WiimoteCommon::ButtonData button_override;
+  if (API::GetWiiButtonsManip().TryGetOverride(m_index, &button_override))
+    manipulated_state.buttons = button_override;
+
+  Nunchuk::DataFormat nunchuk_override;
+  if (API::GetNunchuckButtonsManip().TryGetOverride(m_index, &nunchuk_override))
+  {
+    if (std::holds_alternative<Nunchuk::DataFormat>(manipulated_state.extension.data))
+    {
+      const auto current_nunchuk = std::get<Nunchuk::DataFormat>(manipulated_state.extension.data);
+      nunchuk_override.SetAccel(current_nunchuk.GetAccel().value);
+    }
+    manipulated_state.extension.data = nunchuk_override;
+  }
+
+  m_battery_input_override = manipulated_state.battery.has_value();
+  if (m_battery_input_override)
+    m_battery_setting.SetValue(manipulated_state.battery.value());
+
   // Update buttons in the status struct which is sent in 99% of input reports.
-  UpdateButtonsStatus(target_state);
+  UpdateButtonsStatus(manipulated_state);
 
   // If a new extension is requested in the GUI the change will happen here.
-  HandleExtensionSwap(static_cast<ExtensionNumber>(target_state.extension.data.index()),
-                      target_state.motion_plus.has_value());
+  HandleExtensionSwap(static_cast<ExtensionNumber>(manipulated_state.extension.data.index()),
+                      manipulated_state.motion_plus.has_value());
 
   // Prepare input data of the extension for reading.
-  GetActiveExtension()->Update(target_state.extension);
+  GetActiveExtension()->Update(manipulated_state.extension);
 
   if (m_is_motion_plus_attached)
   {
     // M+ has some internal state that must processed.
-    m_motion_plus.Update(target_state.extension);
+    m_motion_plus.Update(manipulated_state.extension);
   }
 
   // Returns true if a report was sent.
@@ -581,7 +613,7 @@ void Wiimote::Update(const WiimoteEmu::DesiredWiimoteState& target_state)
     return;
   }
 
-  SendDataReport(target_state);
+  SendDataReport(manipulated_state);
 }
 
 void Wiimote::SendDataReport(const DesiredWiimoteState& target_state)
@@ -605,6 +637,7 @@ void Wiimote::SendDataReport(const DesiredWiimoteState& target_state)
   if (rpt_builder.HasCore())
   {
     rpt_builder.SetCoreData(m_status.buttons);
+    API::GetWiiButtonsManip().PerformInputManip(rpt_builder, m_index);
   }
 
   // Acceleration:
@@ -633,6 +666,8 @@ void Wiimote::SendDataReport(const DesiredWiimoteState& target_state)
       // It commonly occurs when changing IR sensitivity.
       std::fill_n(ir_data, ir_size, u8(0xff));
     }
+
+    API::GetWiiIRManip().PerformInputManip(rpt_builder, m_index);
   }
 
   // Extension port:
@@ -659,6 +694,14 @@ void Wiimote::SendDataReport(const DesiredWiimoteState& target_state)
     {
       // Real wiimote seems to fill with 0xff on failed bus read
       std::fill_n(ext_data, ext_size, u8(0xff));
+    }
+
+    if (!m_is_motion_plus_attached && m_active_extension == ExtensionNumber::NUNCHUK)
+    {
+      const auto encryption_key =
+          static_cast<const EncryptedExtension*>(GetActiveExtension())->GetEncryptionKey();
+      API::GetNunchuckButtonsManip().SaveNunchuckState(rpt_builder, m_index, encryption_key);
+      API::GetNunchuckButtonsManip().PerformInputManip(rpt_builder, m_index, encryption_key);
     }
   }
 

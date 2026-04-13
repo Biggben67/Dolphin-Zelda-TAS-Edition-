@@ -13,6 +13,8 @@
 
 #include "Core/HW/GBAPad.h"
 #include "Core/HW/GBAPadEmu.h"
+#include "Core/Movie.h"
+#include "Core/System.h"
 
 #include "DolphinQt/TAS/TASCheckBox.h"
 
@@ -65,6 +67,14 @@ GBATASInputWindow::GBATASInputWindow(QWidget* parent, int controller_id)
   QGroupBox* buttons_box = new QGroupBox(tr("Buttons"));
   buttons_box->setLayout(buttons_layout);
 
+  m_disconnect_checkbox = new QCheckBox(tr("Disconnect link cable"));
+  m_disconnect_checkbox->setToolTip(
+      tr("While checked, the GBA link cable is disconnected for this port during "
+         "recording/playback."));
+  connect(m_disconnect_checkbox, &QCheckBox::toggled, this,
+          [this](bool checked) { Pad::SetGBAForceDisconnect(m_controller_id, checked); });
+  m_settings_box->layout()->addWidget(m_disconnect_checkbox);
+
   auto* layout = new QVBoxLayout;
   layout->addWidget(buttons_box);
   layout->addWidget(m_settings_box);
@@ -75,6 +85,7 @@ GBATASInputWindow::GBATASInputWindow(QWidget* parent, int controller_id)
 void GBATASInputWindow::hideEvent(QHideEvent* event)
 {
   Pad::GetGBAConfig()->GetController(m_controller_id)->ClearInputOverrideFunction();
+  TASInputWindow::hideEvent(event);
 }
 
 void GBATASInputWindow::showEvent(QShowEvent* event)
@@ -82,4 +93,28 @@ void GBATASInputWindow::showEvent(QShowEvent* event)
   Pad::GetGBAConfig()
       ->GetController(m_controller_id)
       ->SetInputOverrideFunction(m_overrider.GetInputOverrideFunction());
+  if (m_disconnect_checkbox)
+    m_disconnect_checkbox->setChecked(Pad::GetGBAForceDisconnect(m_controller_id));
+  TASInputWindow::showEvent(event);
+}
+
+void GBATASInputWindow::UpdateLiveInputDisplay()
+{
+  const auto status = Core::System::GetInstance().GetMovie().GetDisplayedPadStatus(m_controller_id);
+  if (!status.has_value())
+    return;
+
+  const GCPadStatus& pad_status = *status;
+  m_b_button->OnControllerValueChanged((pad_status.button & PAD_BUTTON_B) != 0);
+  m_a_button->OnControllerValueChanged((pad_status.button & PAD_BUTTON_A) != 0);
+  m_l_button->OnControllerValueChanged((pad_status.button & PAD_TRIGGER_L) != 0);
+  m_r_button->OnControllerValueChanged((pad_status.button & PAD_TRIGGER_R) != 0);
+  m_select_button->OnControllerValueChanged((pad_status.button & PAD_TRIGGER_Z) != 0);
+  m_start_button->OnControllerValueChanged((pad_status.button & PAD_BUTTON_START) != 0);
+  m_left_button->OnControllerValueChanged((pad_status.button & PAD_BUTTON_LEFT) != 0);
+  m_up_button->OnControllerValueChanged((pad_status.button & PAD_BUTTON_UP) != 0);
+  m_down_button->OnControllerValueChanged((pad_status.button & PAD_BUTTON_DOWN) != 0);
+  m_right_button->OnControllerValueChanged((pad_status.button & PAD_BUTTON_RIGHT) != 0);
+  if (m_disconnect_checkbox)
+    m_disconnect_checkbox->setChecked((pad_status.button & PAD_BUTTON_Y) != 0);
 }

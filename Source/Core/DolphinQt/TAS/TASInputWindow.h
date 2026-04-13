@@ -20,10 +20,11 @@ class QCheckBox;
 class QDialog;
 class QEvent;
 class QGroupBox;
-class QSpinBox;
 class QString;
+class StickWidget;
 class TASCheckBox;
 class TASSpinBox;
+class QTimer;
 
 class InputOverrider final
 {
@@ -49,16 +50,22 @@ public:
   int GetTurboReleaseFrames() const;
 
 protected:
+  virtual void UpdateLiveInputDisplay() = 0;
+
   TASCheckBox* CreateButton(const QString& text, std::string_view group_name,
                             std::string_view control_name, InputOverrider* overrider);
   QGroupBox* CreateStickInputs(const QString& text, std::string_view group_name,
                                InputOverrider* overrider, int min_x, int min_y, int max_x,
-                               int max_y, Qt::Key x_shortcut_key, Qt::Key y_shortcut_key);
+                               int max_y, Qt::Key x_shortcut_key, Qt::Key y_shortcut_key,
+                               TASSpinBox** x_value_out = nullptr,
+                               TASSpinBox** y_value_out = nullptr,
+                               StickWidget** stick_widget_out = nullptr);
   QBoxLayout* CreateSliderValuePairLayout(const QString& text, std::string_view group_name,
                                           std::string_view control_name, InputOverrider* overrider,
                                           int zero, int default_, int min, int max,
                                           Qt::Key shortcut_key, QWidget* shortcut_widget,
-                                          std::optional<ControlState> scale = {});
+                                          std::optional<ControlState> scale = {},
+                                          TASSpinBox** value_out = nullptr);
   TASSpinBox* CreateSliderValuePair(std::string_view group_name, std::string_view control_name,
                                     InputOverrider* overrider, QBoxLayout* layout, int zero,
                                     int default_, int min, int max,
@@ -73,13 +80,16 @@ protected:
 
   QGroupBox* m_settings_box;
   QCheckBox* m_use_controller;
-  QSpinBox* m_turbo_press_frames;
-  QSpinBox* m_turbo_release_frames;
+  QCheckBox* m_toggle_lines = nullptr;
+  TASSpinBox* m_turbo_press_frames = nullptr;
+  TASSpinBox* m_turbo_release_frames = nullptr;
 
 private:
+  void PollViewInputs();
   std::optional<ControlState> GetButton(TASCheckBox* checkbox, ControlState controller_state);
   std::optional<ControlState> GetSpinBox(TASSpinBox* spin, int zero, int min, int max,
                                          ControlState controller_state);
   std::optional<ControlState> GetSpinBox(TASSpinBox* spin, int zero, ControlState controller_state,
                                          ControlState scale);
+  QTimer* m_view_inputs_timer = nullptr;
 };

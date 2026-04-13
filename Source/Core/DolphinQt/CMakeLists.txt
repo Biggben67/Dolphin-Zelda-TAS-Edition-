@@ -386,6 +386,8 @@ add_executable(dolphin-emu
   SkylanderPortal/SkylanderPortalWindow.h
   TAS/GCTASInputWindow.cpp
   TAS/GCTASInputWindow.h
+  TAS/DTMEditorDialog.cpp
+  TAS/DTMEditorDialog.h
   TAS/GBATASInputWindow.cpp
   TAS/GBATASInputWindow.h
   TAS/IRWidget.cpp
@@ -412,6 +414,17 @@ add_executable(dolphin-emu
   Updater.h
   WiiUpdate.cpp
   WiiUpdate.h
+)
+
+target_sources(dolphin-emu PRIVATE
+  Scripting/ScriptingWidget.cpp
+  Scripting/ScriptFavoritesManager.cpp
+  Scripting/ScriptFavoritesWidget.cpp
+  Scripting/ScriptingWidget.h
+  Scripting/ScriptFavoritesManager.h
+  Scripting/ScriptFavoritesWidget.h
+  Scripting/ScriptsListModel.cpp
+  Scripting/ScriptsListModel.h
 )
 
 if (WIN32)
@@ -516,6 +529,14 @@ if(WIN32)
   add_custom_command(TARGET dolphin-emu POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/qt.conf.win" "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/qt.conf"
   )
+
+  if (DEFINED DOLPHIN_PYTHON_RUNTIME_LIBRARY AND EXISTS "${DOLPHIN_PYTHON_RUNTIME_LIBRARY}")
+    add_custom_command(TARGET dolphin-emu POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+              "${DOLPHIN_PYTHON_RUNTIME_LIBRARY}"
+              "$<TARGET_FILE_DIR:dolphin-emu>/${DOLPHIN_PYTHON_RUNTIME_FILENAME}"
+    )
+  endif()
 
   if (ENABLE_AUTOUPDATE)
     # Copy build_info.txt

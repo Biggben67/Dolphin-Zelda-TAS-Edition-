@@ -73,6 +73,7 @@ public:
 
   void SetHost(std::weak_ptr<GBAHostInterface> host);
   void SetForceDisconnect(bool force_disconnect);
+  bool IsForceDisconnect() const;
   void EReaderQueueCard(std::string_view card_path);
 
   void SendJoybusCommand(u64 gc_ticks, int transfer_time, u8* buffer, u16 keys);

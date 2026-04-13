@@ -82,6 +82,8 @@ static void CreateLoadPath(std::string path)
     File::SetUserPath(D_LOAD_IDX, std::move(path));
   File::CreateFullPath(File::GetUserPath(D_HIRESTEXTURES_IDX));
   File::CreateFullPath(File::GetUserPath(D_RIIVOLUTION_IDX));
+  File::CreateFullPath(File::GetUserPath(D_SCRIPTS_IDX));
+  File::CreateFullPath(File::GetUserPath(D_MODULES_IDX));
   File::CreateFullPath(File::GetUserPath(D_GRAPHICSMOD_IDX));
   File::CreateFullPath(File::GetUserPath(D_DYNAMICINPUT_IDX));
 }
@@ -270,6 +272,8 @@ void CreateDirectories()
   File::CreateFullPath(File::GetUserPath(D_GCUSER_IDX) + JAP_DIR DIR_SEP);
   File::CreateFullPath(File::GetUserPath(D_HIRESTEXTURES_IDX));
   File::CreateFullPath(File::GetUserPath(D_GRAPHICSMOD_IDX));
+  File::CreateFullPath(File::GetUserPath(D_SCRIPTS_IDX));
+  File::CreateFullPath(File::GetUserPath(D_MODULES_IDX));
   File::CreateFullPath(File::GetUserPath(D_MAPS_IDX));
   File::CreateFullPath(File::GetUserPath(D_SCREENSHOTS_IDX));
   File::CreateFullPath(File::GetUserPath(D_SHADERS_IDX));

@@ -20,6 +20,7 @@
 #include "Common/Align.h"
 #include "Common/CommonPaths.h"
 #include "Common/FileUtil.h"
+#include "Common/IniFile.h"
 #include "Common/IOFile.h"
 
 #include "Core/AchievementManager.h"
@@ -276,6 +277,13 @@ void MenuBar::AddFileMenu()
 void MenuBar::AddToolsMenu()
 {
   QMenu* tools_menu = addMenu(tr("&Tools"));
+
+  auto* window_presets_menu = tools_menu->addMenu(tr("Window Presets"));
+  window_presets_menu->addAction(tr("Load Preset..."), this, &MenuBar::WindowPresetsLoad);
+  window_presets_menu->addAction(tr("Save Preset..."), this, &MenuBar::WindowPresetsSave);
+  window_presets_menu->addAction(tr("Set Auto Load Preset..."), this,
+                                 &MenuBar::WindowPresetsAutoLoad);
+  tools_menu->addSeparator();
 
   tools_menu->addAction(tr("&Resource Pack Manager"), this,
                         [this] { emit ShowResourcePackManager(); });
@@ -575,6 +583,14 @@ void MenuBar::AddViewMenu()
   connect(m_show_jit, &QAction::toggled, &Settings::Instance(), &Settings::SetJITVisible);
   connect(&Settings::Instance(), &Settings::JITVisibilityChanged, m_show_jit, &QAction::setChecked);
 
+  QAction* show_scripting = view_menu->addAction(tr("S&cripting"));
+  show_scripting->setCheckable(true);
+  show_scripting->setChecked(Settings::Instance().IsScriptingVisible());
+  connect(show_scripting, &QAction::toggled, &Settings::Instance(),
+          &Settings::SetScriptingVisible);
+  connect(&Settings::Instance(), &Settings::ScriptingVisibilityChanged, show_scripting,
+          &QAction::setChecked);
+
   m_show_assembler = view_menu->addAction(tr("&Assembler"));
   m_show_assembler->setCheckable(true);
   m_show_assembler->setChecked(Settings::Instance().IsAssemblerVisible());
@@ -845,6 +861,7 @@ void MenuBar::AddMovieMenu()
           [](bool value) { Core::System::GetInstance().GetMovie().SetReadOnly(value); });
 
   movie_menu->addAction(tr("TAS Input"), this, [this] { emit ShowTASInput(); });
+  m_dtm_editor = movie_menu->addAction(tr("DTM Editor"), this, [this] { emit ShowDTMEditor(); });
 
   movie_menu->addSeparator();
 
@@ -862,6 +879,13 @@ void MenuBar::AddMovieMenu()
 
   movie_menu->addAction(tr("Customize Movie Window"), this, &MenuBar::ConfigureOSD);
 
+  auto* legacy_input_display = movie_menu->addAction(tr("Legacy Info Display"));
+  legacy_input_display->setCheckable(true);
+  legacy_input_display->setChecked(Config::Get(Config::MAIN_MOVIE_USE_LEGACY_INPUT_DISPLAY));
+  connect(legacy_input_display, &QAction::toggled, [](bool value) {
+    Config::SetBaseOrCurrent(Config::MAIN_MOVIE_USE_LEGACY_INPUT_DISPLAY, value);
+  });
+
   movie_menu->addSeparator();
 
   auto* dump_frames = movie_menu->addAction(tr("Dump Frames"));
@@ -875,6 +899,13 @@ void MenuBar::AddMovieMenu()
   dump_audio->setChecked(Config::Get(Config::MAIN_DUMP_AUDIO));
   connect(dump_audio, &QAction::toggled,
           [](bool value) { Config::SetBaseOrCurrent(Config::MAIN_DUMP_AUDIO, value); });
+
+  auto* view_movie_inputs = movie_menu->addAction(tr("View Movie Inputs"));
+  view_movie_inputs->setCheckable(true);
+  view_movie_inputs->setChecked(Config::Get(Config::MAIN_MOVIE_VIEW_TAS_INPUTS));
+  connect(view_movie_inputs, &QAction::toggled, [](bool value) {
+    Config::SetBaseOrCurrent(Config::MAIN_MOVIE_VIEW_TAS_INPUTS, value);
+  });
 }
 
 void MenuBar::AddJITMenu()

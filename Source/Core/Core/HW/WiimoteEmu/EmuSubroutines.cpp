@@ -3,6 +3,7 @@
 
 #include "Core/HW/WiimoteEmu/WiimoteEmu.h"
 
+#include <algorithm>
 #include <iterator>
 #include <utility>
 
@@ -236,7 +237,7 @@ void Wiimote::HandleRequestStatus(const OutputReportRequestStatus&)
   m_status.extension = m_extension_port.IsDeviceConnected();
   m_status.SetEstimatedCharge(m_battery_setting.GetValue() / ciface::BATTERY_INPUT_MAX_VALUE);
 
-  if (Core::WantsDeterminism())
+  if (Core::WantsDeterminism() && !m_battery_input_override)
   {
     // One less thing to break determinism:
     m_status.SetEstimatedCharge(1.f);
@@ -589,6 +590,35 @@ ExtensionNumber Wiimote::GetActiveExtensionNumber() const
 ControllerEmu::SubscribableSettingValue<bool>& Wiimote::GetMotionPlusSetting()
 {
   return m_motion_plus_setting;
+}
+
+void Wiimote::SetTASBatteryOverride(std::optional<u8> value)
+{
+  if (value.has_value())
+  {
+    const u8 clamped = static_cast<u8>(std::clamp<int>(value.value(), 0, 100));
+    m_tas_battery_override = clamped;
+    m_battery_setting.SetValue(clamped);
+  }
+  else
+  {
+    m_tas_battery_override = std::nullopt;
+  }
+}
+
+std::optional<u8> Wiimote::GetTASBatteryOverride() const
+{
+  return m_tas_battery_override;
+}
+
+double Wiimote::GetBatterySettingValue() const
+{
+  return m_battery_setting.GetValue();
+}
+
+void Wiimote::SetBatterySettingValue(double value)
+{
+  m_battery_setting.SetValue(std::clamp(value, 0.0, 100.0));
 }
 
 }  // namespace WiimoteEmu

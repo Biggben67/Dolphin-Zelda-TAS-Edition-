@@ -113,6 +113,9 @@ SerializedWiimoteState SerializeDesiredState(const DesiredWiimoteState& state)
         state.extension.data);
   }
 
+  if (state.battery.has_value())
+    s.data[s.length++] = state.battery.value();
+
   return s;
 }
 
@@ -123,6 +126,7 @@ bool DeserializeDesiredState(DesiredWiimoteState* state, const SerializedWiimote
   state->acceleration = DesiredWiimoteState::DEFAULT_ACCELERATION;
   state->camera_points = DesiredWiimoteState::DEFAULT_CAMERA;
   state->motion_plus = std::nullopt;
+  state->battery = std::nullopt;
   state->extension.data = std::monostate();
 
   if (serialized.length < 1)
@@ -164,7 +168,7 @@ bool DeserializeDesiredState(DesiredWiimoteState* state, const SerializedWiimote
     return s;
   }();
 
-  if (serialized.length != expected_size)
+  if (serialized.length != expected_size && serialized.length != expected_size + 1)
   {
     // invalid length
     return false;
@@ -233,7 +237,13 @@ bool DeserializeDesiredState(DesiredWiimoteState* state, const SerializedWiimote
   {
     WithVariantAlternative<DesiredExtensionState::ExtensionData>(extension, [&]<typename T>() {
       state->extension.data.emplace<T>(Common::BitCastPtr<T>(&d[pos]));
+      pos += sizeof(T);
     });
+  }
+
+  if (serialized.length == expected_size + 1)
+  {
+    state->battery = d[pos];
   }
 
   return true;

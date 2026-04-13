@@ -36,6 +36,7 @@
 #include "Common/CommonTypes.h"
 #include "Common/Logging/Log.h"
 
+#include "Core/API/Events.h"
 #include "Core/Core.h"
 #include "Core/HW/CPU.h"
 #include "Core/HW/GPFifo.h"
@@ -575,6 +576,7 @@ void MMU::Memcheck(u32 address, u64 var, bool write, size_t size)
   // It doesn't matter if ReadFromHardware triggers its own DSI because
   // we'll take it after resuming.
   m_ppc_state.Exceptions |= EXCEPTION_DSI | EXCEPTION_FAKE_MEMCHECK_HIT;
+  API::GetEventHub().EmitEvent(API::Events::MemoryBreakpoint{write, address, var});
 }
 
 template <std::unsigned_integral T>

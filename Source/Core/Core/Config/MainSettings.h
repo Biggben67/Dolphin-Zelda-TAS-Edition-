@@ -329,9 +329,11 @@ extern const Info<std::string> MAIN_MOVIE_MOVIE_AUTHOR;
 extern const Info<bool> MAIN_MOVIE_DUMP_FRAMES;
 extern const Info<bool> MAIN_MOVIE_DUMP_FRAMES_SILENT;
 extern const Info<bool> MAIN_MOVIE_SHOW_INPUT_DISPLAY;
+extern const Info<bool> MAIN_MOVIE_USE_LEGACY_INPUT_DISPLAY;
 extern const Info<bool> MAIN_MOVIE_SHOW_RTC;
 extern const Info<bool> MAIN_MOVIE_SHOW_RERECORD;
 extern const Info<bool> MAIN_MOVIE_SHOW_OSD;
+extern const Info<bool> MAIN_MOVIE_VIEW_TAS_INPUTS;
 
 // Main.Input
 

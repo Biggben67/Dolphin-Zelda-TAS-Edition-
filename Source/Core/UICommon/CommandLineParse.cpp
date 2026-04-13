@@ -105,6 +105,16 @@ std::unique_ptr<optparse::OptionParser> CreateParser(ParserOptions options)
       .metavar("<file>")
       .type("string")
       .help("Load the initial save state");
+  parser->add_option("--script")
+      .action("store")
+      .metavar("<file>")
+      .type("string")
+      .help("Execute the supplied script");
+  parser->add_option("--no-python-subinterpreters")
+      .action("store_true")
+      .dest("no_python_subinterpreters")
+      .set_default("0")
+      .help("Disable python subinterpreters for compatibility with some python libraries");
 
   if (options == ParserOptions::IncludeGUIOptions)
   {

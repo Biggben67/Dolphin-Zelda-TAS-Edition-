@@ -30,11 +30,14 @@
 #include "Core/System.h"
 #include "Core/WiiUtils.h"
 
+#include "DolphinQt/Settings.h"
+#include "DolphinQt/TAS/GCTASInputWindow.h"
+#include "DolphinQt/TAS/WiiTASInputWindow.h"
+#include "DolphinQt/QtUtils/QueueOnObject.h"
+
 #ifdef HAS_LIBMGBA
 #include "DolphinQt/GBAWidget.h"
-#include "DolphinQt/QtUtils/QueueOnObject.h"
 #endif
-#include "DolphinQt/Settings.h"
 
 #include "InputCommon/ControlReference/ControlReference.h"
 #include "InputCommon/ControllerInterface/ControllerInterface.h"
@@ -598,6 +601,7 @@ void HotkeyScheduler::Run()
       }
 
       CheckGBAHotkeys();
+      CheckTasEssHotkeys();
     }
 
     const auto stereo_depth = Config::Get(Config::GFX_STEREO_DEPTH);
@@ -728,4 +732,55 @@ void HotkeyScheduler::CheckGBAHotkeys()
   if (IsHotkey(HK_GBA_4X))
     QueueOnObject(gba_widget, [gba_widget] { gba_widget->Resize(4); });
 #endif
+}
+
+void HotkeyScheduler::CheckTasEssHotkeys()
+{
+  GCTASInputWindow* gc_tas = GCTASInputWindow::GetInstanceForController(0);
+  if (gc_tas)
+  {
+    auto queue_main_preset = [gc_tas](Hotkey hk, int preset_index) {
+      if (IsHotkey(hk))
+      {
+        QueueOnObject(gc_tas, [gc_tas, preset_index] {
+          if (gc_tas)
+            gc_tas->ApplyEssPreset(preset_index);
+        });
+      }
+    };
+
+    queue_main_preset(HK_TAS_MAIN_STICK_ESS_UP_LEFT, 0);
+    queue_main_preset(HK_TAS_MAIN_STICK_ESS_UP, 1);
+    queue_main_preset(HK_TAS_MAIN_STICK_ESS_UP_RIGHT, 2);
+    queue_main_preset(HK_TAS_MAIN_STICK_ESS_LEFT, 3);
+    queue_main_preset(HK_TAS_MAIN_STICK_ESS_CENTER, 4);
+    queue_main_preset(HK_TAS_MAIN_STICK_ESS_RIGHT, 5);
+    queue_main_preset(HK_TAS_MAIN_STICK_ESS_DOWN_LEFT, 6);
+    queue_main_preset(HK_TAS_MAIN_STICK_ESS_DOWN, 7);
+    queue_main_preset(HK_TAS_MAIN_STICK_ESS_DOWN_RIGHT, 8);
+  }
+
+  WiiTASInputWindow* wii_tas = WiiTASInputWindow::GetInstanceForController(0);
+  if (!wii_tas)
+    return;
+
+  auto queue_nunchuk_preset = [wii_tas](Hotkey hk, int preset_index) {
+    if (IsHotkey(hk))
+    {
+      QueueOnObject(wii_tas, [wii_tas, preset_index] {
+        if (wii_tas)
+          wii_tas->ApplyNunchukEssPreset(preset_index);
+      });
+    }
+  };
+
+  queue_nunchuk_preset(HK_TAS_NUNCHUK_STICK_ESS_UP_LEFT, 0);
+  queue_nunchuk_preset(HK_TAS_NUNCHUK_STICK_ESS_UP, 1);
+  queue_nunchuk_preset(HK_TAS_NUNCHUK_STICK_ESS_UP_RIGHT, 2);
+  queue_nunchuk_preset(HK_TAS_NUNCHUK_STICK_ESS_LEFT, 3);
+  queue_nunchuk_preset(HK_TAS_NUNCHUK_STICK_ESS_CENTER, 4);
+  queue_nunchuk_preset(HK_TAS_NUNCHUK_STICK_ESS_RIGHT, 5);
+  queue_nunchuk_preset(HK_TAS_NUNCHUK_STICK_ESS_DOWN_LEFT, 6);
+  queue_nunchuk_preset(HK_TAS_NUNCHUK_STICK_ESS_DOWN, 7);
+  queue_nunchuk_preset(HK_TAS_NUNCHUK_STICK_ESS_DOWN_RIGHT, 8);
 }

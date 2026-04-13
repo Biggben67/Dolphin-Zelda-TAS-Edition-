@@ -11,6 +11,8 @@ class QGroupBox;
 class QHideEvent;
 class QShowEvent;
 class QSpinBox;
+class ScriptFavoritesWidget;
+class StickWidget;
 class TASCheckBox;
 class TASSpinBox;
 
@@ -30,6 +32,10 @@ class WiiTASInputWindow : public TASInputWindow
   Q_OBJECT
 public:
   explicit WiiTASInputWindow(QWidget* parent, int num);
+  ~WiiTASInputWindow() override;
+
+  static WiiTASInputWindow* GetInstanceForController(int controller_id);
+  void ApplyNunchukEssPreset(int preset_index);
 
   void hideEvent(QHideEvent* event) override;
   void showEvent(QShowEvent* event) override;
@@ -38,6 +44,7 @@ public:
   void UpdateMotionPlus(bool attached);
 
 private:
+  void UpdateLiveInputDisplay() override;
   WiimoteEmu::Wiimote* GetWiimote();
   ControllerEmu::Attachments* GetAttachments();
   WiimoteEmu::Extension* GetExtension();
@@ -45,6 +52,8 @@ private:
   void LoadExtensionAndMotionPlus();
   void UpdateControlVisibility();
   void UpdateInputOverrideFunction();
+  void ApplyBatteryOverrideFromUI();
+  void UpdateFavoritesWidgetHeight();
 
   WiimoteEmu::ExtensionNumber m_active_extension;
   int m_attachment_callback_id = -1;
@@ -86,6 +95,24 @@ private:
   TASCheckBox* m_classic_right_button;
   TASSpinBox* m_ir_x_value;
   TASSpinBox* m_ir_y_value;
+  TASSpinBox* m_remote_accelerometer_x_value = nullptr;
+  TASSpinBox* m_remote_accelerometer_y_value = nullptr;
+  TASSpinBox* m_remote_accelerometer_z_value = nullptr;
+  TASSpinBox* m_remote_gyroscope_x_value = nullptr;
+  TASSpinBox* m_remote_gyroscope_y_value = nullptr;
+  TASSpinBox* m_remote_gyroscope_z_value = nullptr;
+  TASSpinBox* m_nunchuk_stick_x_value = nullptr;
+  TASSpinBox* m_nunchuk_stick_y_value = nullptr;
+  TASSpinBox* m_nunchuk_accelerometer_x_value = nullptr;
+  TASSpinBox* m_nunchuk_accelerometer_y_value = nullptr;
+  TASSpinBox* m_nunchuk_accelerometer_z_value = nullptr;
+  TASSpinBox* m_classic_left_stick_x_value = nullptr;
+  TASSpinBox* m_classic_left_stick_y_value = nullptr;
+  TASSpinBox* m_classic_right_stick_x_value = nullptr;
+  TASSpinBox* m_classic_right_stick_y_value = nullptr;
+  TASSpinBox* m_classic_l_trigger_value = nullptr;
+  TASSpinBox* m_classic_r_trigger_value = nullptr;
+  StickWidget* m_nunchuk_stick_widget = nullptr;
   QGroupBox* m_remote_accelerometer_box;
   QGroupBox* m_remote_gyroscope_box;
   QGroupBox* m_nunchuk_accelerometer_box;
@@ -97,4 +124,6 @@ private:
   QGroupBox* m_nunchuk_buttons_box;
   QGroupBox* m_classic_buttons_box;
   QGroupBox* m_triggers_box;
+  ScriptFavoritesWidget* m_favorites_widget = nullptr;
+  QSpinBox* m_battery_value = nullptr;
 };

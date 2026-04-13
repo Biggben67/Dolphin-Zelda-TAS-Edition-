@@ -23,6 +23,8 @@ InputConfig* GetGBAConfig();
 
 GCPadStatus GetGBAStatus(int pad_num);
 void SetGBAReset(int pad_num, bool reset);
+void SetGBAForceDisconnect(int pad_num, bool force_disconnect);
+bool GetGBAForceDisconnect(int pad_num);
 
 ControllerEmu::ControlGroup* GetGBAGroup(int pad_num, GBAPadGroup group);
 }  // namespace Pad

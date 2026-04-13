@@ -20,10 +20,12 @@ signals:
 public slots:
   void SetX(u16 x);
   void SetY(u16 y);
+  void SetAxisLines(bool toggle);
 
 protected:
   void paintEvent(QPaintEvent* event) override;
   void mousePressEvent(QMouseEvent* event) override;
+  void mouseReleaseEvent(QMouseEvent* event) override;
   void mouseMoveEvent(QMouseEvent* event) override;
   void handleMouseEvent(QMouseEvent* event);
 
@@ -32,5 +34,6 @@ private:
   u16 m_max_y;
   u16 m_x = 0;
   u16 m_y = 0;
-  bool m_ignore_movement = false;
+  bool m_ignore_movement = true;
+  bool m_axis_lines = true;
 };

@@ -57,6 +57,26 @@ constexpr std::array<const char*, NUM_HOTKEYS> s_hotkey_labels{{
     _trans("Export Recording"),
     _trans("Read-Only Mode"),
 
+    _trans("TAS Main Stick ESS Up-Left"),
+    _trans("TAS Main Stick ESS Up"),
+    _trans("TAS Main Stick ESS Up-Right"),
+    _trans("TAS Main Stick ESS Left"),
+    _trans("TAS Main Stick ESS Center"),
+    _trans("TAS Main Stick ESS Right"),
+    _trans("TAS Main Stick ESS Down-Left"),
+    _trans("TAS Main Stick ESS Down"),
+    _trans("TAS Main Stick ESS Down-Right"),
+
+    _trans("TAS Nunchuk Stick ESS Up-Left"),
+    _trans("TAS Nunchuk Stick ESS Up"),
+    _trans("TAS Nunchuk Stick ESS Up-Right"),
+    _trans("TAS Nunchuk Stick ESS Left"),
+    _trans("TAS Nunchuk Stick ESS Center"),
+    _trans("TAS Nunchuk Stick ESS Right"),
+    _trans("TAS Nunchuk Stick ESS Down-Left"),
+    _trans("TAS Nunchuk Stick ESS Down"),
+    _trans("TAS Nunchuk Stick ESS Down-Right"),
+
     // i18n: Here, "Step" is a verb. This feature is used for
     // going through code step by step.
     _trans("Step Into"),
@@ -207,6 +227,7 @@ namespace HotkeyManagerEmu
 static std::array<u32, NUM_HOTKEY_GROUPS> s_hotkey_down;
 static HotkeyStatus s_hotkey;
 static bool s_enabled;
+static bool s_block_state_hotkeys;
 
 static InputConfig s_config("Hotkeys", _trans("Hotkeys"), "Hotkeys", "Hotkeys");
 
@@ -233,6 +254,9 @@ void Enable(bool enable_toggle)
 
 bool IsPressed(int id, bool held)
 {
+  if (s_block_state_hotkeys && id >= HK_LOAD_STATE_SLOT_1 && id <= HK_DECREMENT_SELECTED_STATE_SLOT)
+    return false;
+
   unsigned int group = static_cast<HotkeyManager*>(s_config.GetController(0))->FindGroupByID(id);
   unsigned int group_key =
       static_cast<HotkeyManager*>(s_config.GetController(0))->GetIndexForGroup(group, id);
@@ -251,6 +275,11 @@ bool IsPressed(int id, bool held)
   return false;
 }
 
+void SetStateHotkeysBlocked(bool blocked)
+{
+  s_block_state_hotkeys = blocked;
+}
+
 void Initialize()
 {
   if (s_config.ControllersNeedToBeCreated())
@@ -264,6 +293,7 @@ void Initialize()
   s_hotkey_down = {};
 
   s_enabled = true;
+  s_block_state_hotkeys = false;
 }
 
 void LoadConfig()
@@ -302,6 +332,10 @@ constexpr std::array<HotkeyGroupInfo, NUM_HOTKEY_GROUPS> s_groups_info = {
      {_trans("Emulation Speed"), HK_DECREASE_EMULATION_SPEED, HK_TOGGLE_THROTTLE},
      {_trans("Frame Advance"), HK_FRAME_ADVANCE, HK_FRAME_ADVANCE_RESET_SPEED},
      {_trans("Movie"), HK_START_RECORDING, HK_READ_ONLY_MODE},
+     {_trans("TAS Main Stick ESS"), HK_TAS_MAIN_STICK_ESS_UP_LEFT,
+      HK_TAS_MAIN_STICK_ESS_DOWN_RIGHT},
+     {_trans("TAS Nunchuk Stick ESS"), HK_TAS_NUNCHUK_STICK_ESS_UP_LEFT,
+      HK_TAS_NUNCHUK_STICK_ESS_DOWN_RIGHT},
      {_trans("Stepping"), HK_STEP, HK_SKIP},
      {_trans("Program Counter"), HK_SHOW_PC, HK_SET_PC},
      {_trans("Breakpoint"), HK_BP_TOGGLE, HK_MBP_ADD},

@@ -195,7 +195,10 @@ void Initialize(InitializeMode init_mode)
   // Reload Wiimotes with our settings
   auto& movie = Core::System::GetInstance().GetMovie();
   if (movie.IsMovieActive())
+  {
     movie.ChangeWiiPads();
+    movie.ApplyWiimoteBatteryIfPending();
+  }
 }
 
 void ResetAllWiimotes()

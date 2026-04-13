@@ -75,6 +75,7 @@ private:
   void Run();
   void CheckDebuggingHotkeys();
   void CheckGBAHotkeys();
+  void CheckTasEssHotkeys();
 
   Common::Flag m_stop_requested;
   std::thread m_thread;

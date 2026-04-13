@@ -12,10 +12,8 @@
 
 #include "Common/CommonTypes.h"
 #include "Core/HW/WiimoteEmu/DesiredWiimoteState.h"
-
+#include "InputCommon/GCPadStatus.h"
 struct BootParameters;
-
-struct GCPadStatus;
 class PointerWrap;
 
 namespace Core
@@ -145,6 +143,37 @@ static_assert(sizeof(DTMHeader) == 256, "DTMHeader should be 256 bytes");
 
 #pragma pack(pop)
 
+struct GCRuntimeFrameSnapshot
+{
+  std::array<bool, 4> active_controllers{};
+  std::vector<std::array<ControllerState, 4>> rows;
+  std::vector<std::optional<u64>> row_game_frames;
+  u64 current_frame = 0;
+  u64 current_input_row = 0;
+  bool is_recording = false;
+  bool is_playing = false;
+  bool is_read_only = true;
+};
+
+struct WiiRuntimeInputRow
+{
+  int wiimote = -1;
+  bool is_reset = false;
+  WiimoteEmu::SerializedWiimoteState serialized_state{};
+};
+
+struct WiiRuntimeFrameSnapshot
+{
+  std::array<bool, 4> active_wiimotes{};
+  std::vector<WiiRuntimeInputRow> rows;
+  std::vector<std::optional<u64>> row_game_frames;
+  u64 current_frame = 0;
+  u64 current_input_row = 0;
+  bool is_recording = false;
+  bool is_playing = false;
+  bool is_read_only = true;
+};
+
 enum class PlayMode
 {
   None = 0,
@@ -199,6 +228,7 @@ public:
   bool IsUsingGBA(int controller) const;
   void ChangePads();
   void ChangeWiiPads(bool instantly = false);
+  void ApplyWiimoteBatteryIfPending();
 
   void SetReadOnly(bool bEnabled);
 
@@ -220,12 +250,28 @@ public:
   void CheckWiimoteStatus(int wiimote, const WiimoteEmu::DesiredWiimoteState& desired_state);
 
   std::string GetInputDisplay();
+  std::string GetInfoDisplay();
   std::string GetRTCDisplay() const;
   std::string GetRerecords() const;
+  std::optional<GCRuntimeFrameSnapshot> GetGCRuntimeFrameSnapshot() const;
+  bool SetGCRuntimeFrameState(u64 frame, int controller, const ControllerState& state);
+  std::optional<WiiRuntimeFrameSnapshot> GetWiiRuntimeFrameSnapshot() const;
+  bool SetWiiRuntimeFrameState(u64 row, const WiimoteEmu::SerializedWiimoteState& serialized_state);
+  std::optional<GCPadStatus> GetDisplayedPadStatus(int controller) const;
+  std::optional<WiimoteEmu::DesiredWiimoteState> GetDisplayedWiimoteState(int wiimote) const;
+  void OnAfterStateLoad();
 
 private:
   void GetSettings();
   void CheckInputEnd();
+  void SaveWiimoteBatteryToHeader(DTMHeader* header) const;
+  void ApplyWiimoteBatteryFromHeader(const DTMHeader& header);
+  void SaveGBADisconnectToHeader(DTMHeader* header) const;
+  void ApplyGBADisconnectFromHeader(const DTMHeader& header);
+  void ApplyGBADisconnectIfPending();
+  void UpdateDisplayedPadStatus(int controller, const GCPadStatus& status);
+  void UpdateDisplayedWiimoteState(int wiimote,
+                                   const WiimoteEmu::DesiredWiimoteState& desired_state);
 
   void CheckMD5();
   void GetMD5();
@@ -262,15 +308,26 @@ private:
   std::array<u8, 20> m_revision{};
   u32 m_dsp_irom_hash = 0;
   u32 m_dsp_coef_hash = 0;
+  bool m_has_dtm_wiimote_battery = false;
+  std::array<u8, 4> m_dtm_wiimote_battery{};
+  bool m_has_dtm_gba_disconnect = false;
+  u8 m_dtm_gba_disconnect_mask = 0;
 
   bool m_recording_from_save_state = false;
   bool m_polled = false;
 
   std::string m_current_file_name;
+  std::string m_movie_path;
 
   // m_input_display is used by both CPU and GPU (is mutable).
   std::mutex m_input_display_lock;
   std::array<std::string, 8> m_input_display;
+  mutable std::mutex m_live_input_lock;
+  std::array<std::optional<GCPadStatus>, 4> m_displayed_pad_status{};
+  std::array<std::optional<WiimoteEmu::SerializedWiimoteState>, 4> m_displayed_wiimote_state{};
+  mutable std::mutex m_temp_input_lock;
+  std::vector<std::optional<u64>> m_gc_runtime_row_frames;
+  std::vector<std::optional<u64>> m_wii_runtime_row_frames;
 
   Core::System& m_system;
 };

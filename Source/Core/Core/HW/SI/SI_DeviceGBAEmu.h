@@ -31,6 +31,7 @@ public:
   void SendCommand(u32 command, u8 poll) override;
   void DoState(PointerWrap& p) override;
   void OnEvent(u64 userdata, s64 cycles_late) override;
+  std::shared_ptr<HW::GBA::Core> GetCore() const;
 
 private:
   enum class NextAction

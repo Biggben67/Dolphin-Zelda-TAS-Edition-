@@ -10,6 +10,7 @@
 #include "Common/Timer.h"
 
 #include "Core/AchievementManager.h"
+#include "Core/API/Gui.h"
 #include "Core/Config/AchievementSettings.h"
 #include "Core/Config/GraphicsSettings.h"
 #include "Core/Config/MainSettings.h"
@@ -275,40 +276,87 @@ void OnScreenUI::DrawImGui()
 // Create On-Screen-Messages
 void OnScreenUI::DrawDebugText()
 {
-  if (Config::Get(Config::MAIN_MOVIE_SHOW_OSD))
+  const bool use_legacy_info_display = Config::Get(Config::MAIN_MOVIE_USE_LEGACY_INPUT_DISPLAY);
+  const bool show_legacy_movie_window =
+      Config::Get(Config::MAIN_SHOW_FRAME_COUNT) || Config::Get(Config::MAIN_SHOW_LAG) ||
+      Config::Get(Config::MAIN_MOVIE_SHOW_INPUT_DISPLAY) || Config::Get(Config::MAIN_MOVIE_SHOW_RTC) ||
+      Config::Get(Config::MAIN_MOVIE_SHOW_RERECORD);
+
+  if (use_legacy_info_display ? show_legacy_movie_window :
+                                Config::Get(Config::MAIN_MOVIE_SHOW_OSD))
   {
-    // Position under the FPS display.
-    ImGui::SetNextWindowPos(
-        ImVec2(ImGui::GetIO().DisplaySize.x - ImGui::GetFontSize() * m_backbuffer_scale,
-               80.f * m_backbuffer_scale),
-        ImGuiCond_FirstUseEver, ImVec2(1.0f, 0.0f));
-    ImGui::SetNextWindowSizeConstraints(ImVec2(5.0f * ImGui::GetFontSize() * m_backbuffer_scale,
-                                               2.1f * ImGui::GetFontSize() * m_backbuffer_scale),
-                                        ImGui::GetIO().DisplaySize);
-    if (ImGui::Begin("Movie", nullptr, ImGuiWindowFlags_NoFocusOnAppearing))
+    ImGuiWindowFlags window_flags = ImGuiWindowFlags_NoFocusOnAppearing;
+    if (use_legacy_info_display)
+    {
+      const float margin = 10.f * m_backbuffer_scale;
+      ImGui::SetNextWindowPos(ImVec2(margin, margin), ImGuiCond_Always, ImVec2(0.0f, 0.0f));
+      ImGui::SetNextWindowSizeConstraints(
+          ImVec2(150.0f * m_backbuffer_scale, 20.0f * m_backbuffer_scale),
+          ImGui::GetIO().DisplaySize);
+      window_flags |= ImGuiWindowFlags_NoBackground;
+      window_flags |= ImGuiWindowFlags_NoTitleBar;
+      window_flags |= ImGuiWindowFlags_AlwaysAutoResize;
+    }
+    else
+    {
+      ImGui::SetNextWindowPos(
+          ImVec2(ImGui::GetIO().DisplaySize.x - ImGui::GetFontSize() * m_backbuffer_scale,
+                 80.f * m_backbuffer_scale),
+          ImGuiCond_FirstUseEver, ImVec2(1.0f, 0.0f));
+      ImGui::SetNextWindowSizeConstraints(ImVec2(5.0f * ImGui::GetFontSize() * m_backbuffer_scale,
+                                                 2.1f * ImGui::GetFontSize() * m_backbuffer_scale),
+                                          ImGui::GetIO().DisplaySize);
+    }
+
+    if (ImGui::Begin("Movie", nullptr, window_flags))
     {
       auto& movie = Core::System::GetInstance().GetMovie();
+      const ImVec4 cyan = ImVec4(0.0f, 1.0f, 1.0f, 1.0f);
+      const auto text = [use_legacy_info_display, cyan](const char* fmt, auto... args) {
+        if (use_legacy_info_display)
+          ImGui::TextColored(cyan, fmt, args...);
+        else
+          ImGui::Text(fmt, args...);
+      };
+      const auto text_unformatted = [use_legacy_info_display, cyan](const std::string& value) {
+        if (use_legacy_info_display)
+          ImGui::TextColored(cyan, "%s", value.c_str());
+        else
+          ImGui::TextUnformatted(value.c_str());
+      };
+
+      if (use_legacy_info_display)
+      {
+        if (movie.IsRecordingInput())
+          ImGui::TextColored(ImVec4(1.0f, 0.0f, 1.0f, 1.0f), "RECORDING");
+        else if (movie.IsPlayingInput())
+          ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "PLAYBACK");
+      }
+
       if (movie.IsPlayingInput())
       {
-        ImGui::Text("Frame: %" PRIu64 " / %" PRIu64, movie.GetCurrentFrame(),
-                    movie.GetTotalFrames());
-        ImGui::Text("Input: %" PRIu64 " / %" PRIu64, movie.GetCurrentInputCount(),
-                    movie.GetTotalInputCount());
+        text("Frame: %" PRIu64 " / %" PRIu64, movie.GetCurrentFrame(), movie.GetTotalFrames());
+        text("Input: %" PRIu64 " / %" PRIu64, movie.GetCurrentInputCount(),
+             movie.GetTotalInputCount());
       }
       else if (Config::Get(Config::MAIN_SHOW_FRAME_COUNT))
       {
-        ImGui::Text("Frame: %" PRIu64, movie.GetCurrentFrame());
+        text("Frame: %" PRIu64, movie.GetCurrentFrame());
         if (movie.IsRecordingInput())
-          ImGui::Text("Input: %" PRIu64, movie.GetCurrentInputCount());
+          text("Input: %" PRIu64, movie.GetCurrentInputCount());
       }
       if (Config::Get(Config::MAIN_SHOW_LAG))
-        ImGui::Text("Lag: %" PRIu64 "\n", movie.GetCurrentLagCount());
+        text("Lag: %" PRIu64 "\n", movie.GetCurrentLagCount());
       if (Config::Get(Config::MAIN_MOVIE_SHOW_INPUT_DISPLAY))
-        ImGui::TextUnformatted(movie.GetInputDisplay().c_str());
+      {
+        text_unformatted(movie.GetInputDisplay());
+        if (use_legacy_info_display)
+          text_unformatted(movie.GetInfoDisplay());
+      }
       if (Config::Get(Config::MAIN_MOVIE_SHOW_RTC))
-        ImGui::TextUnformatted(movie.GetRTCDisplay().c_str());
+        text_unformatted(movie.GetRTCDisplay());
       if (Config::Get(Config::MAIN_MOVIE_SHOW_RERECORD))
-        ImGui::TextUnformatted(movie.GetRerecords().c_str());
+        text_unformatted(movie.GetRerecords());
     }
     ImGui::End();
   }
@@ -418,6 +466,7 @@ void OnScreenUI::Finalize()
   auto lock = GetImGuiLock();
 
   g_perf_metrics.DrawImGuiStats(m_backbuffer_scale);
+  API::GetGui().Render();
   DrawDebugText();
   OSD::DrawMessages();
   DrawChallengesAndLeaderboards();

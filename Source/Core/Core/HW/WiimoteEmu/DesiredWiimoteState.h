@@ -28,6 +28,7 @@ struct DesiredWiimoteState
   WiimoteCommon::AccelData acceleration = DEFAULT_ACCELERATION;
   std::array<CameraPoint, 4> camera_points = DEFAULT_CAMERA;
   std::optional<MotionPlus::DataFormat::Data> motion_plus = std::nullopt;
+  std::optional<u8> battery = std::nullopt;
   DesiredExtensionState extension;
 };
 
@@ -35,7 +36,7 @@ struct DesiredWiimoteState
 struct SerializedWiimoteState
 {
   u8 length;
-  std::array<u8, 30> data;  // 18 bytes Wiimote, 6 bytes MotionPlus, 6 bytes Extension
+  std::array<u8, 31> data;  // 18 bytes Wiimote, 6 bytes MotionPlus, 6 bytes Extension, 1 battery
 };
 
 SerializedWiimoteState SerializeDesiredState(const DesiredWiimoteState& state);

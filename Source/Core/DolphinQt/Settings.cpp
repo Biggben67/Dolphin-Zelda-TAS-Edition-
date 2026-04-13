@@ -796,6 +796,20 @@ bool Settings::IsJITVisible() const
   return GetQSettings().value(QStringLiteral("debugger/showjit")).toBool();
 }
 
+void Settings::SetScriptingVisible(bool enabled)
+{
+  if (IsScriptingVisible() == enabled)
+    return;
+  GetQSettings().setValue(QStringLiteral("debugger/showscripting"), enabled);
+
+  emit ScriptingVisibilityChanged(enabled);
+}
+
+bool Settings::IsScriptingVisible() const
+{
+  return GetQSettings().value(QStringLiteral("debugger/showscripting")).toBool();
+}
+
 void Settings::SetAssemblerVisible(bool enabled)
 {
   if (IsAssemblerVisible() == enabled)
@@ -815,6 +829,7 @@ void Settings::RefreshWidgetVisibility()
   emit DebugModeToggled(IsDebugModeEnabled());
   emit LogVisibilityChanged(IsLogVisible());
   emit LogConfigVisibilityChanged(IsLogConfigVisible());
+  emit ScriptingVisibilityChanged(IsScriptingVisible());
 }
 
 void Settings::SetDebugFont(QFont font)

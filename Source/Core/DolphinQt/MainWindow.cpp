@@ -10,16 +10,25 @@
 #include <QDir>
 #include <QDragEnterEvent>
 #include <QDropEvent>
+#include <QFile>
 #include <QFileInfo>
 #include <QIcon>
+#include <QInputDialog>
+#include <QLineEdit>
+#include <QMargins>
+#include <QSaveFile>
 #include <QMimeData>
+#include <QSet>
 #include <QStackedWidget>
 #include <QStyleHints>
+#include <QTextStream>
+#include <QTimer>
 #include <QVBoxLayout>
 #include <QWindow>
 
 #include <fmt/format.h>
 
+#include <algorithm>
 #include <future>
 #include <optional>
 #include <variant>
@@ -36,6 +45,7 @@
 
 #include "Common/Config/Config.h"
 #include "Common/FileUtil.h"
+#include "Common/IniFile.h"
 #include "Common/ScopeGuard.h"
 #include "Common/Version.h"
 #include "Common/WindowSystemInfo.h"
@@ -108,6 +118,7 @@
 #include "DolphinQt/QtUtils/FileOpenEventFilter.h"
 #include "DolphinQt/QtUtils/ModalMessageBox.h"
 #include "DolphinQt/QtUtils/ParallelProgressDialog.h"
+#include "DolphinQt/Scripting/ScriptingWidget.h"
 #include "DolphinQt/QtUtils/QueueOnObject.h"
 #include "DolphinQt/QtUtils/RunOnObject.h"
 #include "DolphinQt/QtUtils/WindowActivationEventFilter.h"
@@ -118,6 +129,7 @@
 #include "DolphinQt/SearchBar.h"
 #include "DolphinQt/Settings.h"
 #include "DolphinQt/SkylanderPortal/SkylanderPortalWindow.h"
+#include "DolphinQt/TAS/DTMEditorDialog.h"
 #include "DolphinQt/TAS/GBATASInputWindow.h"
 #include "DolphinQt/TAS/GCTASInputWindow.h"
 #include "DolphinQt/TAS/WiiTASInputWindow.h"
@@ -209,6 +221,167 @@ static std::vector<std::string> StringListToStdVector(QStringList list)
     result.push_back(s.toStdString());
 
   return result;
+}
+
+struct WindowPresetEntry
+{
+  QString preset;
+  QString window;
+  int x = 0;
+  int y = 0;
+  int width = 0;
+  int height = 0;
+};
+
+static QString WindowPresetsPath()
+{
+  return QString::fromStdString(File::GetUserPath(D_CONFIG_IDX) + "WindowPresets.csv");
+}
+
+enum class AutoWindowPresetMode
+{
+  GameName,
+  Fixed,
+  Disabled
+};
+
+static AutoWindowPresetMode ReadAutoWindowPresetMode()
+{
+  Common::IniFile ini;
+  ini.Load(File::GetUserPath(D_CONFIG_IDX) + "Dolphin.ini");
+  auto* section = ini.GetOrCreateSection("TAS");
+  std::string mode;
+  section->Get("AutoWindowPresetMode", &mode, "game");
+  if (mode == "fixed")
+    return AutoWindowPresetMode::Fixed;
+  if (mode == "disabled")
+    return AutoWindowPresetMode::Disabled;
+  return AutoWindowPresetMode::GameName;
+}
+
+static QString ReadAutoWindowPresetName()
+{
+  Common::IniFile ini;
+  ini.Load(File::GetUserPath(D_CONFIG_IDX) + "Dolphin.ini");
+  auto* section = ini.GetOrCreateSection("TAS");
+  std::string name;
+  section->Get("AutoWindowPresetName", &name, "");
+  return QString::fromStdString(name);
+}
+
+static void WriteAutoWindowPreset(AutoWindowPresetMode mode, const QString& name)
+{
+  Common::IniFile ini;
+  const std::string path = File::GetUserPath(D_CONFIG_IDX) + "Dolphin.ini";
+  ini.Load(path);
+  auto* section = ini.GetOrCreateSection("TAS");
+  std::string mode_value = "game";
+  if (mode == AutoWindowPresetMode::Fixed)
+    mode_value = "fixed";
+  else if (mode == AutoWindowPresetMode::Disabled)
+    mode_value = "disabled";
+  section->Set("AutoWindowPresetMode", mode_value);
+  section->Set("AutoWindowPresetName", name.toStdString());
+  ini.Save(path);
+}
+
+static QList<WindowPresetEntry> ReadWindowPresetEntries(const QString& path)
+{
+  QList<WindowPresetEntry> entries;
+  QFile file(path);
+  if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
+    return entries;
+
+  QTextStream in(&file);
+  while (!in.atEnd())
+  {
+    const QString line = in.readLine().trimmed();
+    if (line.isEmpty())
+      continue;
+
+    const QStringList parts = line.split(QLatin1Char(','));
+    if (parts.size() < 4)
+      continue;
+
+    bool x_ok = false;
+    bool y_ok = false;
+    bool width_ok = false;
+    bool height_ok = false;
+
+    int x = 0;
+    int y = 0;
+    int width = 0;
+    int height = 0;
+    QString window;
+    QString preset;
+
+    if (parts.size() >= 6)
+    {
+      x = parts[parts.size() - 4].toInt(&x_ok);
+      y = parts[parts.size() - 3].toInt(&y_ok);
+      width = parts[parts.size() - 2].toInt(&width_ok);
+      height = parts[parts.size() - 1].toInt(&height_ok);
+      window = parts[parts.size() - 5].trimmed();
+      preset = parts.mid(0, parts.size() - 5).join(QLatin1Char(',')).trimmed();
+    }
+    else
+    {
+      x_ok = true;
+      y_ok = true;
+      width = parts[parts.size() - 2].toInt(&width_ok);
+      height = parts[parts.size() - 1].toInt(&height_ok);
+      window = parts[parts.size() - 3].trimmed();
+      preset = parts.mid(0, parts.size() - 3).join(QLatin1Char(',')).trimmed();
+    }
+
+    if (!x_ok || !y_ok || !width_ok || !height_ok || preset.isEmpty() || window.isEmpty())
+      continue;
+
+    entries.push_back({preset, window, x, y, width, height});
+  }
+
+  return entries;
+}
+
+static QString MakeWindowPresetKey(const QString& prefix, int index)
+{
+  return QStringLiteral("%1%2").arg(prefix).arg(index + 1);
+}
+
+static void ApplyWindowGeometry(QWidget* window, const WindowPresetEntry& entry)
+{
+  if (!window)
+    return;
+
+  const bool was_minimized = window->isMinimized();
+
+  QRect frame;
+  QRect geom;
+  if (QWindow* handle = window->windowHandle())
+  {
+    frame = handle->frameGeometry();
+    geom = handle->geometry();
+  }
+  else
+  {
+    frame = window->frameGeometry();
+    geom = window->geometry();
+  }
+
+  const QMargins margins(geom.left() - frame.left(), geom.top() - frame.top(),
+                         frame.right() - geom.right(), frame.bottom() - geom.bottom());
+  const int client_width = std::max(1, entry.width - margins.left() - margins.right());
+  const int client_height = std::max(1, entry.height - margins.top() - margins.bottom());
+  const QRect client_rect(entry.x + margins.left(), entry.y + margins.top(), client_width,
+                          client_height);
+
+  if (QWindow* handle = window->windowHandle())
+    handle->setGeometry(client_rect);
+  else
+    window->setGeometry(client_rect);
+
+  if (!was_minimized && window->isMinimized())
+    window->setWindowState(window->windowState() & ~Qt::WindowMinimized);
 }
 
 MainWindow::MainWindow(Core::System& system, std::unique_ptr<BootParameters> boot_parameters,
@@ -466,6 +639,7 @@ void MainWindow::CreateComponents()
   m_memory_widget = new MemoryWidget(m_system, this);
   m_network_widget = new NetworkWidget(this);
   m_register_widget = new RegisterWidget(this);
+  m_scripting_widget = new ScriptingWidget(this);
   m_thread_widget = new ThreadWidget(this);
   m_watch_widget = new WatchWidget(this);
   m_breakpoint_widget = new BreakpointWidget(this);
@@ -561,6 +735,10 @@ void MainWindow::ConnectMenuBar()
   connect(m_menu_bar, &MenuBar::ImportNANDBackup, this, &MainWindow::OnImportNANDBackup);
   connect(m_menu_bar, &MenuBar::PerformOnlineUpdate, this, &MainWindow::PerformOnlineUpdate);
   connect(m_menu_bar, &MenuBar::BootWiiSystemMenu, this, &MainWindow::BootWiiSystemMenu);
+  connect(m_menu_bar, &MenuBar::WindowPresetsSave, this, &MainWindow::SaveWindowPreset);
+  connect(m_menu_bar, &MenuBar::WindowPresetsLoad, this, &MainWindow::LoadWindowPreset);
+  connect(m_menu_bar, &MenuBar::WindowPresetsAutoLoad, this,
+          &MainWindow::ConfigureAutoWindowPreset);
   connect(m_menu_bar, &MenuBar::StartNetPlay, this, &MainWindow::ShowNetPlaySetupDialog);
   connect(m_menu_bar, &MenuBar::BrowseNetPlay, this, &MainWindow::ShowNetPlayBrowser);
   connect(m_menu_bar, &MenuBar::ShowFIFOPlayer, this, &MainWindow::ShowFIFOPlayer);
@@ -580,6 +758,7 @@ void MainWindow::ConnectMenuBar()
   connect(m_menu_bar, &MenuBar::StopRecording, this, &MainWindow::OnStopRecording);
   connect(m_menu_bar, &MenuBar::ExportRecording, this, &MainWindow::OnExportRecording);
   connect(m_menu_bar, &MenuBar::ShowTASInput, this, &MainWindow::ShowTASInput);
+  connect(m_menu_bar, &MenuBar::ShowDTMEditor, this, &MainWindow::ShowDTMEditor);
   connect(m_menu_bar, &MenuBar::ConfigureOSD, this, &MainWindow::ShowOSDWindow);
 
   // View
@@ -758,6 +937,7 @@ void MainWindow::ConnectStack()
   addDockWidget(Qt::LeftDockWidgetArea, m_memory_widget);
   addDockWidget(Qt::LeftDockWidgetArea, m_network_widget);
   addDockWidget(Qt::LeftDockWidgetArea, m_jit_widget);
+  addDockWidget(Qt::LeftDockWidgetArea, m_scripting_widget);
   addDockWidget(Qt::LeftDockWidgetArea, m_assembler_widget);
 
   tabifyDockWidget(m_log_widget, m_log_config_widget);
@@ -769,6 +949,7 @@ void MainWindow::ConnectStack()
   tabifyDockWidget(m_log_widget, m_memory_widget);
   tabifyDockWidget(m_log_widget, m_network_widget);
   tabifyDockWidget(m_log_widget, m_jit_widget);
+  tabifyDockWidget(m_log_widget, m_scripting_widget);
   tabifyDockWidget(m_log_widget, m_assembler_widget);
 }
 
@@ -1166,6 +1347,8 @@ void MainWindow::StartGame(std::unique_ptr<BootParameters>&& parameters)
 
   // We need the render widget before booting.
   ShowRenderWidget();
+  if (parameters)
+    AutoLoadWindowPreset(*parameters);
 
   // Boot up, show an error if it fails to load the game.
   if (!BootManager::BootCore(m_system, std::move(parameters),
@@ -1345,6 +1528,261 @@ void MainWindow::ShowOSDWindow()
 {
   ShowSettingsWindow();
   m_settings_window->SelectPane(SettingsWindowPaneIndex::OnScreenDisplay);
+}
+
+void MainWindow::SaveWindowPreset()
+{
+  const QString suggested_name = m_last_window_preset_name;
+  bool ok = false;
+  const QString preset_name = QInputDialog::getText(
+      this, tr("Save Window Preset"), tr("Preset name:"), QLineEdit::Normal, suggested_name, &ok);
+  if (!ok)
+    return;
+
+  const QString trimmed_name = preset_name.trimmed();
+  if (trimmed_name.isEmpty())
+    return;
+
+  QList<WindowPresetEntry> entries = ReadWindowPresetEntries(WindowPresetsPath());
+  entries.erase(std::remove_if(entries.begin(), entries.end(),
+                               [&trimmed_name](const WindowPresetEntry& entry) {
+                                 return entry.preset == trimmed_name;
+                               }),
+                entries.end());
+
+  auto add_window_entry = [&](const QString& window_key, const QWidget* window) {
+    if (!window)
+      return;
+    const QPoint top_left = window->frameGeometry().topLeft();
+    const QSize size = window->frameGeometry().size();
+    if (size.width() <= 0 || size.height() <= 0)
+      return;
+    entries.push_back(
+        {trimmed_name, window_key, top_left.x(), top_left.y(), size.width(), size.height()});
+  };
+
+  const bool render_to_main =
+      m_rendering_to_main || Config::Get(Config::MAIN_RENDER_TO_MAIN);
+  if (render_to_main)
+    add_window_entry(QStringLiteral("RenderWindow"), this);
+  else
+    add_window_entry(QStringLiteral("RenderWindow"), m_render_widget);
+
+  for (int i = 0; i < static_cast<int>(m_gc_tas_input_windows.size()); ++i)
+    add_window_entry(MakeWindowPresetKey(QStringLiteral("GCTAS"), i), m_gc_tas_input_windows[i]);
+  for (int i = 0; i < static_cast<int>(m_wii_tas_input_windows.size()); ++i)
+    add_window_entry(MakeWindowPresetKey(QStringLiteral("WiiTAS"), i), m_wii_tas_input_windows[i]);
+
+  QSaveFile file(WindowPresetsPath());
+  if (!file.open(QIODevice::WriteOnly | QIODevice::Text))
+  {
+    ModalMessageBox::warning(
+        this, tr("Error"),
+        tr("Failed to save window presets to \"%1\".").arg(WindowPresetsPath()));
+    return;
+  }
+
+  QTextStream out(&file);
+  for (const auto& entry : entries)
+    out << entry.preset << ',' << entry.window << ',' << entry.x << ',' << entry.y << ','
+        << entry.width << ',' << entry.height << '\n';
+
+  if (!file.commit())
+  {
+    ModalMessageBox::warning(
+        this, tr("Error"),
+        tr("Failed to save window presets to \"%1\".").arg(WindowPresetsPath()));
+  }
+}
+
+void MainWindow::LoadWindowPreset()
+{
+  const QList<WindowPresetEntry> entries = ReadWindowPresetEntries(WindowPresetsPath());
+  QSet<QString> preset_names;
+  for (const auto& entry : entries)
+    preset_names.insert(entry.preset);
+
+  if (preset_names.isEmpty())
+  {
+    ModalMessageBox::information(this, tr("Window Presets"),
+                                 tr("No window presets were found."), QMessageBox::Ok);
+    return;
+  }
+
+  QStringList names = preset_names.values();
+  names.sort(Qt::CaseInsensitive);
+  bool ok = false;
+  const QString preset_name =
+      QInputDialog::getItem(this, tr("Load Window Preset"), tr("Preset:"), names, 0, false, &ok);
+  if (!ok || preset_name.trimmed().isEmpty())
+    return;
+
+  ApplyWindowPreset(preset_name.trimmed(), true);
+}
+
+void MainWindow::ConfigureAutoWindowPreset()
+{
+  const QList<WindowPresetEntry> entries = ReadWindowPresetEntries(WindowPresetsPath());
+  QSet<QString> preset_names;
+  for (const auto& entry : entries)
+    preset_names.insert(entry.preset);
+
+  QStringList choices;
+  choices << tr("Use Game Name") << tr("Disable Auto Load");
+  if (!preset_names.isEmpty())
+  {
+    QStringList names = preset_names.values();
+    names.sort(Qt::CaseInsensitive);
+    choices.append(names);
+  }
+
+  AutoWindowPresetMode mode = ReadAutoWindowPresetMode();
+  QString current_name = ReadAutoWindowPresetName();
+
+  int current_index = 0;
+  if (mode == AutoWindowPresetMode::Disabled)
+    current_index = 1;
+  else if (mode == AutoWindowPresetMode::Fixed && !current_name.isEmpty())
+  {
+    const int preset_index = choices.indexOf(current_name);
+    if (preset_index >= 0)
+      current_index = preset_index;
+  }
+
+  bool ok = false;
+  const QString selection = QInputDialog::getItem(
+      this, tr("Auto Load Window Preset"), tr("Preset:"), choices, current_index, false, &ok);
+  if (!ok || selection.trimmed().isEmpty())
+    return;
+
+  if (selection == tr("Use Game Name"))
+  {
+    WriteAutoWindowPreset(AutoWindowPresetMode::GameName, {});
+  }
+  else if (selection == tr("Disable Auto Load"))
+  {
+    WriteAutoWindowPreset(AutoWindowPresetMode::Disabled, {});
+  }
+  else
+  {
+    WriteAutoWindowPreset(AutoWindowPresetMode::Fixed, selection);
+  }
+}
+
+void MainWindow::ApplyWindowPreset(const QString& preset_name, bool warn_if_missing)
+{
+  const QList<WindowPresetEntry> entries = ReadWindowPresetEntries(WindowPresetsPath());
+  bool applied = false;
+
+  for (const auto& entry : entries)
+  {
+    if (entry.preset != preset_name)
+      continue;
+
+    if (entry.window == QStringLiteral("RenderWindow"))
+    {
+      const bool render_to_main =
+          m_rendering_to_main || Config::Get(Config::MAIN_RENDER_TO_MAIN);
+      if (render_to_main)
+        ApplyWindowGeometry(this, entry);
+      else if (m_render_widget)
+        ApplyWindowGeometry(m_render_widget->window(), entry);
+      applied = true;
+      continue;
+    }
+
+    if (entry.window.startsWith(QStringLiteral("GCTAS")))
+    {
+      const int index = entry.window.mid(5).toInt() - 1;
+      if (index >= 0 && index < static_cast<int>(m_gc_tas_input_windows.size()) &&
+          m_gc_tas_input_windows[index])
+      {
+        ApplyWindowGeometry(m_gc_tas_input_windows[index], entry);
+        applied = true;
+      }
+      continue;
+    }
+
+    if (entry.window.startsWith(QStringLiteral("WiiTAS")))
+    {
+      const int index = entry.window.mid(6).toInt() - 1;
+      if (index >= 0 && index < static_cast<int>(m_wii_tas_input_windows.size()) &&
+          m_wii_tas_input_windows[index])
+      {
+        ApplyWindowGeometry(m_wii_tas_input_windows[index], entry);
+        applied = true;
+      }
+      continue;
+    }
+  }
+
+  if (!applied && warn_if_missing)
+  {
+    ModalMessageBox::information(
+        this, tr("Window Presets"),
+        tr("No matching window sizes were found for \"%1\".").arg(preset_name), QMessageBox::Ok);
+  }
+}
+
+void MainWindow::AutoLoadWindowPreset(const BootParameters& parameters)
+{
+  const AutoWindowPresetMode mode = ReadAutoWindowPresetMode();
+  if (mode == AutoWindowPresetMode::Disabled)
+    return;
+
+  QString preset_name;
+  if (mode == AutoWindowPresetMode::Fixed)
+    preset_name = ReadAutoWindowPresetName().trimmed();
+  else
+    preset_name = GetAutoWindowPresetName(parameters);
+
+  m_last_window_preset_name = preset_name;
+  if (preset_name.isEmpty())
+    return;
+
+  ApplyWindowPreset(preset_name, false);
+}
+
+QString MainWindow::GetAutoWindowPresetName(const BootParameters& parameters) const
+{
+  return std::visit(
+      [](const auto& params) -> QString {
+        using T = std::decay_t<decltype(params)>;
+        if constexpr (std::is_same_v<T, BootParameters::Disc>)
+        {
+          const QString path = QString::fromStdString(params.path);
+          const QString base = QFileInfo(path).completeBaseName().trimmed();
+          if (!base.isEmpty())
+            return base;
+          const std::string game_id = params.volume ? params.volume->GetGameID() : std::string();
+          if (!game_id.empty())
+            return QString::fromStdString(game_id);
+        }
+        else if constexpr (std::is_same_v<T, BootParameters::Executable>)
+        {
+          const QString base = QFileInfo(QString::fromStdString(params.path)).completeBaseName();
+          if (!base.isEmpty())
+            return base.trimmed();
+        }
+        else if constexpr (std::is_same_v<T, DiscIO::VolumeWAD>)
+        {
+          const std::string game_id = params.GetGameID();
+          if (!game_id.empty())
+            return QString::fromStdString(game_id);
+        }
+        else if constexpr (std::is_same_v<T, BootParameters::IPL>)
+        {
+          if (params.disc && !params.disc->path.empty())
+          {
+            const QString base =
+                QFileInfo(QString::fromStdString(params.disc->path)).completeBaseName().trimmed();
+            if (!base.isEmpty())
+              return base;
+          }
+        }
+        return {};
+      },
+      parameters.parameters);
 }
 
 void MainWindow::ShowAboutDialog()
@@ -2000,6 +2438,29 @@ void MainWindow::ShowTASInput()
       m_wii_tas_input_windows[i]->activateWindow();
     }
   }
+
+  const AutoWindowPresetMode mode = ReadAutoWindowPresetMode();
+  if (mode != AutoWindowPresetMode::Disabled)
+  {
+    const QString preset_name =
+        (mode == AutoWindowPresetMode::Fixed) ? ReadAutoWindowPresetName().trimmed() :
+                                                m_last_window_preset_name;
+    if (!preset_name.isEmpty())
+    {
+      QTimer::singleShot(0, this,
+                         [this, preset_name] { ApplyWindowPreset(preset_name, false); });
+    }
+  }
+}
+
+void MainWindow::ShowDTMEditor()
+{
+  if (!m_dtm_editor)
+    m_dtm_editor = new DTMEditorDialog(this);
+
+  m_dtm_editor->show();
+  m_dtm_editor->raise();
+  m_dtm_editor->activateWindow();
 }
 
 void MainWindow::OnConnectWiiRemote(int id)

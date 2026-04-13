@@ -13,6 +13,7 @@
 #include <mgba/core/timing.h>
 #include <mgba/internal/gb/gb.h>
 #include <mgba/internal/gba/gba.h>
+#include <mgba/internal/gba/sio.h>
 
 #include <mz.h>
 #include <mz_strm.h>
@@ -36,6 +37,7 @@
 #include "Core/Core.h"
 #include "Core/HW/SystemTimers.h"
 #include "Core/Host.h"
+#include "Core/Movie.h"
 #include "Core/NetPlayProto.h"
 #include "Core/System.h"
 
@@ -159,6 +161,15 @@ static std::array<u8, 20> GetROMHash(VFile* rom)
   return digest;
 }
 
+static void ForceJoybusMode(mCore* core)
+{
+  if (!core || core->platform(core) != mPLATFORM_GBA)
+    return;
+
+  auto& sio = static_cast<::GBA*>(core->board)->sio;
+  GBASIOWriteRCNT(&sio, 0xC000);
+}
+
 Core::Core(::Core::System& system, int device_number)
     : m_device_number(device_number), m_system(system)
 {
@@ -247,6 +258,7 @@ bool Core::Start(u64 gc_ticks)
   SetupEvent();
 
   m_core->reset(m_core);
+  ForceJoybusMode(m_core);
   m_started = true;
   start_guard.Dismiss();
   // Notify the host and handle a dimension change if that happened after reset()
@@ -295,6 +307,7 @@ void Core::Reset()
     return;
 
   m_core->reset(m_core);
+  ForceJoybusMode(m_core);
 }
 
 bool Core::IsStarted() const
@@ -329,6 +342,11 @@ void Core::SetHost(std::weak_ptr<GBAHostInterface> host)
 void Core::SetForceDisconnect(bool force_disconnect)
 {
   m_force_disconnect = force_disconnect;
+}
+
+bool Core::IsForceDisconnect() const
+{
+  return m_force_disconnect;
 }
 
 void Core::EReaderQueueCard(std::string_view card_path)
@@ -387,20 +405,24 @@ void Core::SetSIODriver()
     return;
 
   m_sio_driver.core = this;
-  m_sio_driver.init = [](GBASIODriver*) { return true; };
+  m_sio_driver.init = [](GBASIODriver* driver) {
+    static_cast<SIODriver*>(driver)->core->m_link_enabled = true;
+    return true;
+  };
   m_sio_driver.deinit = [](GBASIODriver* driver) {
     static_cast<SIODriver*>(driver)->core->m_link_enabled = false;
   };
   m_sio_driver.reset = [](GBASIODriver* driver) {
-    static_cast<SIODriver*>(driver)->core->m_link_enabled = false;
+    static_cast<SIODriver*>(driver)->core->m_link_enabled = true;
   };
   m_sio_driver.setMode = [](GBASIODriver* driver, GBASIOMode mode) {
-    static_cast<SIODriver*>(driver)->core->m_link_enabled = mode == GBA_SIO_JOYBUS;
+    static_cast<SIODriver*>(driver)->core->m_link_enabled = true;
   };
   m_sio_driver.handlesMode = [](GBASIODriver*, GBASIOMode mode) { return mode == GBA_SIO_JOYBUS; };
   m_sio_driver.connectedDevices = [](GBASIODriver*) { return 1; };
 
   GBASIOSetDriver(&static_cast<::GBA*>(m_core->board)->sio, &m_sio_driver);
+  m_link_enabled = true;
 }
 
 void Core::SetVideoBuffer()
@@ -558,7 +580,8 @@ void Core::RunCommand(Command& command)
   if (!command.sync_only)
   {
     m_response.clear();
-    if (m_link_enabled && !m_force_disconnect)
+    const bool allow_movie_compat_link = m_system.GetMovie().IsPlayingInput();
+    if ((m_link_enabled || allow_movie_compat_link) && !m_force_disconnect)
     {
       int recvd = GBASIOJOYSendCommand(
           &m_sio_driver, static_cast<GBASIOJOYCommand>(command.buffer[0]), &command.buffer[1]);
@@ -620,6 +643,7 @@ void Core::ImportState(std::string_view state_path)
 
   file.ReadBytes(core_state.data(), core_state.size());
   m_core->loadState(m_core, core_state.data());
+  ForceJoybusMode(m_core);
 }
 
 void Core::ExportState(std::string_view state_path)
@@ -648,6 +672,7 @@ void Core::ImportSave(std::string_view save_path)
 
   m_core->savedataRestore(m_core, save_file.data(), save_file.size(), true);
   m_core->reset(m_core);
+  ForceJoybusMode(m_core);
 }
 
 void Core::ExportSave(std::string_view save_path)
@@ -716,6 +741,7 @@ void Core::DoState(PointerWrap& p)
   if (p.IsReadMode() && m_core->stateSize(m_core) == core_state.size())
   {
     m_core->loadState(m_core, core_state.data());
+    ForceJoybusMode(m_core);
     if (auto host = m_host.lock())
       host->FrameEnded(m_video_buffer);
   }

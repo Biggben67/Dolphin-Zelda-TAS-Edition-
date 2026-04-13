@@ -14,6 +14,7 @@
 #include "Common/FloatUtils.h"
 #include "Common/Logging/Log.h"
 
+#include "Core/API/Events.h"
 #include "Core/CPUThreadConfigCallback.h"
 #include "Core/Config/MainSettings.h"
 #include "Core/Core.h"
@@ -649,6 +650,7 @@ bool PowerPCManager::CheckAndHandleBreakPoints()
 {
   if (CheckBreakPoints())
   {
+    API::GetEventHub().EmitEvent(API::Events::CodeBreakpoint{m_ppc_state.pc});
     m_system.GetCPU().Break();
     if (GDBStub::IsActive())
       GDBStub::TakeControl();

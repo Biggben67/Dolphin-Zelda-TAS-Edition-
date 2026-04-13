@@ -629,6 +629,8 @@ dolphin_find_optional_system_library_pkgconfig(FMT
 )
 
 add_subdirectory(Externals/imgui)
+add_subdirectory(Externals/nativefiledialog-extended)
+include_directories(Externals/nativefiledialog-extended/src/include)
 add_subdirectory(Externals/implot)
 
 dolphin_find_optional_system_library(glslang Externals/glslang DOLPHIN_TRY_VERSIONS 15 16)

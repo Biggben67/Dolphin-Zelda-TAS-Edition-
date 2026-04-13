@@ -57,6 +57,17 @@ void SetGBAReset(int pad_num, bool reset)
   static_cast<GBAPad*>(s_config.GetController(pad_num))->SetReset(reset);
 }
 
+void SetGBAForceDisconnect(int pad_num, bool force_disconnect)
+{
+  static_cast<GBAPad*>(s_config.GetController(pad_num))
+      ->SetForceDisconnectOverride(force_disconnect);
+}
+
+bool GetGBAForceDisconnect(int pad_num)
+{
+  return static_cast<GBAPad*>(s_config.GetController(pad_num))->GetForceDisconnectOverride();
+}
+
 ControllerEmu::ControlGroup* GetGBAGroup(int pad_num, GBAPadGroup group)
 {
   return static_cast<GBAPad*>(s_config.GetController(pad_num))->GetGroup(group);

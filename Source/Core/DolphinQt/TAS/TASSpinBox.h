@@ -7,7 +7,7 @@
 
 #include "DolphinQt/TAS/TASControlState.h"
 
-class TASInputWindow;
+class QFocusEvent;
 
 class TASSpinBox : public QSpinBox
 {
@@ -25,5 +25,8 @@ private slots:
   void ApplyControllerValueChange();
 
 private:
+  void focusInEvent(QFocusEvent* event) override;
+  void focusOutEvent(QFocusEvent* event) override;
+
   TASControlState m_state;
 };

@@ -16,9 +16,10 @@ constexpr int PADDING = 1;
 StickWidget::StickWidget(QWidget* parent, u16 max_x, u16 max_y)
     : QWidget(parent), m_max_x(max_x), m_max_y(max_y)
 {
-  setMouseTracking(false);
+  setMouseTracking(true);
   setToolTip(tr("Left click to set the stick value.\n"
                 "Right click to re-center it."));
+  setFocusPolicy(Qt::StrongFocus);
 
   // If the widget gets too small, it will get deformed.
   setMinimumSize(QSize(64, 64));
@@ -38,6 +39,12 @@ void StickWidget::SetY(u16 y)
   update();
 }
 
+void StickWidget::SetAxisLines(bool toggle)
+{
+  m_axis_lines = toggle;
+  update();
+}
+
 void StickWidget::paintEvent(QPaintEvent* event)
 {
   QPainter painter(this);
@@ -53,8 +60,13 @@ void StickWidget::paintEvent(QPaintEvent* event)
   painter.setBrush(Qt::white);
   painter.drawEllipse(PADDING, PADDING, diameter, diameter);
 
-  painter.drawLine(PADDING, PADDING + diameter / 2, PADDING + diameter, PADDING + diameter / 2);
-  painter.drawLine(PADDING + diameter / 2, PADDING, PADDING + diameter / 2, PADDING + diameter);
+  if (m_axis_lines)
+  {
+    painter.drawLine(PADDING, PADDING + diameter / 2, PADDING + diameter,
+                     PADDING + diameter / 2);
+    painter.drawLine(PADDING + diameter / 2, PADDING, PADDING + diameter / 2,
+                     PADDING + diameter);
+  }
 
   // convert from value space to widget space
   u16 x = PADDING + ((m_x * diameter) / m_max_x);
@@ -72,6 +84,12 @@ void StickWidget::mousePressEvent(QMouseEvent* event)
 {
   handleMouseEvent(event);
   m_ignore_movement = event->button() == Qt::RightButton;
+}
+
+void StickWidget::mouseReleaseEvent(QMouseEvent* event)
+{
+  handleMouseEvent(event);
+  m_ignore_movement = event->button() == Qt::LeftButton || event->button() == Qt::RightButton;
 }
 
 void StickWidget::mouseMoveEvent(QMouseEvent* event)

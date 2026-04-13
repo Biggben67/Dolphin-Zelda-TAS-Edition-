@@ -9,7 +9,7 @@
 
 namespace Common
 {
-#define EMULATOR_NAME "Dolphin"
+#define EMULATOR_NAME "Dolphin 2512-Zelda TAS Edition"
 
 #ifdef _DEBUG
 #define BUILD_TYPE_STR "Debug "
@@ -21,17 +21,7 @@ namespace Common
 
 const std::string& GetScmRevStr()
 {
-  static const std::string scm_rev_str = EMULATOR_NAME " "
-  // Note this macro can be empty if the master branch does not exist.
-#if 1 - SCM_COMMITS_AHEAD_MASTER - 1 != 0
-                                                       "[" SCM_BRANCH_STR "] "
-#endif
-
-#ifdef __INTEL_COMPILER
-      BUILD_TYPE_STR SCM_DESC_STR "-ICC";
-#else
-      BUILD_TYPE_STR SCM_DESC_STR;
-#endif
+  static const std::string scm_rev_str = EMULATOR_NAME;
   return scm_rev_str;
 }
 
