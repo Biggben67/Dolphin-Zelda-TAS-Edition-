@@ -706,7 +706,96 @@ void MainWindow::StartControlPipe()
     });
     return games;
   };
+  hooks.record_start = [this](const std::string& path) {
+    QueueOnObject(this, [this, path] { PipeStartRecording(path); });
+  };
+  hooks.record_stop = [this](const std::string& path) {
+    QueueOnObject(this, [this, path] { PipeStopRecording(path); });
+  };
+  hooks.play_movie = [this](const std::string& dtm, const std::string& game) {
+    QueueOnObject(this, [this, dtm, game] { PipePlayMovie(dtm, game); });
+  };
   Scripting::StartControlPipe(m_system, std::move(hooks));
+}
+
+// Dialog-free, path-driven variants of OnStart/Stop/PlayRecording for the control pipe.
+void MainWindow::PipeStartRecording(const std::string& save_path)
+{
+  auto& movie = m_system.GetMovie();
+  if (Core::GetState(m_system) == Core::State::Starting ||
+      Core::GetState(m_system) == Core::State::Stopping || movie.IsRecordingInput() ||
+      movie.IsPlayingInput())
+  {
+    return;
+  }
+
+  m_pipe_record_path = save_path;  // saved on stop unless that call supplies its own path
+
+  if (movie.IsReadOnly())
+  {
+    movie.SetReadOnly(false);
+    emit ReadOnlyModeChanged(true);
+  }
+
+  Movie::ControllerTypeArray controllers{};
+  Movie::WiimoteEnabledArray wiimotes{};
+  for (int i = 0; i < 4; i++)
+  {
+    const SerialInterface::SIDevices si_device = Config::Get(Config::GetInfoForSIDevice(i));
+    if (si_device == SerialInterface::SIDEVICE_GC_GBA_EMULATED)
+      controllers[i] = Movie::ControllerType::GBA;
+    else if (SerialInterface::SIDevice_IsGCController(si_device))
+      controllers[i] = Movie::ControllerType::GC;
+    else
+      controllers[i] = Movie::ControllerType::None;
+    wiimotes[i] = Config::Get(Config::GetInfoForWiimoteSource(i)) != WiimoteSource::None;
+  }
+
+  if (movie.BeginRecordingInput(controllers, wiimotes))
+  {
+    emit RecordingStatusChanged(true);
+    if (Core::IsUninitialized(m_system))
+      Play();
+  }
+}
+
+void MainWindow::PipeStopRecording(const std::string& save_path)
+{
+  auto& movie = m_system.GetMovie();
+  if (movie.IsRecordingInput())
+  {
+    const std::string path = !save_path.empty() ? save_path : m_pipe_record_path;
+    if (!path.empty())
+    {
+      const Core::CPUThreadGuard guard(m_system);
+      movie.SaveRecording(path);
+    }
+  }
+  if (movie.IsMovieActive())
+    movie.EndPlayInput(false);
+  m_pipe_record_path.clear();
+  emit RecordingStatusChanged(false);
+}
+
+void MainWindow::PipePlayMovie(const std::string& dtm, const std::string& game)
+{
+  if (dtm.empty() || game.empty())
+    return;
+  auto& movie = m_system.GetMovie();
+  if (!movie.IsReadOnly())
+  {
+    movie.SetReadOnly(true);
+    emit ReadOnlyModeChanged(true);
+  }
+  std::optional<std::string> savestate_path;
+  if (!movie.PlayInput(dtm, &savestate_path))
+    return;
+  emit RecordingStatusChanged(true);
+
+  // Boot the caller-supplied game directly (never Play(), whose no-selection fallback opens a file
+  // dialog). StartGame stops a running game and queues this boot if needed.
+  StartGame(game, ScanForSecondDisc::Yes,
+            std::make_unique<BootSessionData>(savestate_path, DeleteSavestateAfterBoot::No));
 }
 
 MainWindow::~MainWindow()

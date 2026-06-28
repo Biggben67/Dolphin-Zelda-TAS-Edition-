@@ -397,8 +397,14 @@ void HandleRequest(HANDLE pipe, const char* buf, Core::System* system)
   }
   else if (strstr(buf, "\"status\""))
   {
-    u64 frame = system->GetMovie().GetCurrentFrame();
-    WriteResponseWithFrame(pipe, true, StateToString(state), frame);
+    auto& movie = system->GetMovie();
+    char resp[256];
+    int len = snprintf(
+        resp, sizeof(resp),
+        "{\"ok\":true,\"state\":\"%s\",\"frame\":%" PRIu64 ",\"recording\":%s,\"playing\":%s}\n",
+        StateToString(state), movie.GetCurrentFrame(), movie.IsRecordingInput() ? "true" : "false",
+        movie.IsPlayingInput() ? "true" : "false");
+    WriteRaw(pipe, resp, len);
   }
   else if (strstr(buf, "\"pause\""))
   {
@@ -608,6 +614,45 @@ void HandleRequest(HANDLE pipe, const char* buf, Core::System* system)
       }
       resp += "]}\n";
       WriteString(pipe, resp);
+    }
+  }
+  else if (strstr(buf, "\"recordstart\""))
+  {
+    char path[512] = {};
+    ParseStringField(buf, "\"path\"", path, sizeof(path));  // optional
+    if (!s_hooks.record_start)
+      WriteResponse(pipe, false, StateToString(state));
+    else
+    {
+      s_hooks.record_start(path);
+      WriteResponse(pipe, true, StateToString(state));
+    }
+  }
+  else if (strstr(buf, "\"recordstop\""))
+  {
+    char path[512] = {};
+    ParseStringField(buf, "\"path\"", path, sizeof(path));  // optional; saved if given
+    if (!s_hooks.record_stop)
+      WriteResponse(pipe, false, StateToString(state));
+    else
+    {
+      s_hooks.record_stop(path);
+      WriteResponse(pipe, true, StateToString(state));
+    }
+  }
+  else if (strstr(buf, "\"playmovie\""))
+  {
+    char dtm[512] = {};
+    char game[512] = {};
+    if (!s_hooks.play_movie || !ParseStringField(buf, "\"path\"", dtm, sizeof(dtm)) ||
+        !ParseStringField(buf, "\"game\"", game, sizeof(game)))
+    {
+      WriteResponse(pipe, false, StateToString(state));
+    }
+    else
+    {
+      s_hooks.play_movie(dtm, game);
+      WriteResponse(pipe, true, "booting");
     }
   }
   else if (strstr(buf, "\"logconfig\""))

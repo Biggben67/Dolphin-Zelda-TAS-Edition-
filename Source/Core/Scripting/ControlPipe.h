@@ -33,6 +33,11 @@ struct HostHooks
   std::function<void()> stop;
   std::function<void()> reset;
   std::function<std::vector<GameEntry>()> list_games;
+  // DTM movies. record_start/stop take an optional save path; play takes the DTM and the game
+  // to boot it on (caller supplies the game path; no game-id lookup).
+  std::function<void(const std::string& path)> record_start;
+  std::function<void(const std::string& path)> record_stop;
+  std::function<void(const std::string& dtm, const std::string& game)> play_movie;
 };
 
 void StartControlPipe(Core::System& system, HostHooks hooks = {});
