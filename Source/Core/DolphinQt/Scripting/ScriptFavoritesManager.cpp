@@ -6,10 +6,10 @@
 #include <QDir>
 #include <QFileInfo>
 
+#include "DolphinQt/QtUtils/QueueOnObject.h"
 #include "DolphinQt/Settings.h"
 
 #include "Scripting/ScriptList.h"
-#include "Scripting/ScriptingEngine.h"
 
 namespace
 {
@@ -25,6 +25,10 @@ ScriptFavoritesManager& ScriptFavoritesManager::Get()
 ScriptFavoritesManager::ScriptFavoritesManager()
 {
   LoadFavorites();
+
+  // Refresh the Scripts panel when the script map changes, including from the control pipe.
+  Scripts::SetChangeCallback(
+      [this] { QueueOnObject(this, [this] { emit ScriptStatesChanged(); }); });
 }
 
 QStringList ScriptFavoritesManager::GetFavorites() const
@@ -64,7 +68,7 @@ void ScriptFavoritesManager::ToggleFavorite(const QString& path)
 
 bool ScriptFavoritesManager::IsScriptEnabled(const QString& path) const
 {
-  return Scripts::g_scripts.find(NormalizePath(path).toStdString()) != Scripts::g_scripts.end();
+  return Scripts::IsEnabled(NormalizePath(path).toStdString());
 }
 
 void ScriptFavoritesManager::SetScriptEnabled(const QString& path, bool enabled)
@@ -73,28 +77,7 @@ void ScriptFavoritesManager::SetScriptEnabled(const QString& path, bool enabled)
   if (normalized.isEmpty())
     return;
 
-  const std::string file_path = normalized.toStdString();
-  const auto it = Scripts::g_scripts.find(file_path);
-
-  if (enabled)
-  {
-    if (it == Scripts::g_scripts.end())
-    {
-      Scripting::ScriptingBackend* backend = nullptr;
-      if (Scripts::g_scripts_started)
-        backend = new Scripting::ScriptingBackend(file_path);
-      Scripts::g_scripts[file_path] = backend;
-      emit ScriptStatesChanged();
-    }
-    return;
-  }
-
-  if (it != Scripts::g_scripts.end())
-  {
-    delete it->second;
-    Scripts::g_scripts.erase(it);
-    emit ScriptStatesChanged();
-  }
+  Scripts::SetEnabled(normalized.toStdString(), enabled);
 }
 
 void ScriptFavoritesManager::RestartScript(const QString& path)
@@ -103,13 +86,7 @@ void ScriptFavoritesManager::RestartScript(const QString& path)
   if (normalized.isEmpty())
     return;
 
-  auto it = Scripts::g_scripts.find(normalized.toStdString());
-  if (it != Scripts::g_scripts.end() && it->second != nullptr)
-  {
-    delete it->second;
-    it->second = new Scripting::ScriptingBackend(normalized.toStdString());
-    emit ScriptStatesChanged();
-  }
+  Scripts::Restart(normalized.toStdString());
 }
 
 void ScriptFavoritesManager::LoadFavorites()

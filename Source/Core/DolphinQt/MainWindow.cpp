@@ -110,6 +110,7 @@
 #include "DolphinQt/GBAWidget.h"
 #include "DolphinQt/GCMemcardManager.h"
 #include "DolphinQt/GameList/GameList.h"
+#include "DolphinQt/GameList/GameListModel.h"
 #include "DolphinQt/Host.h"
 #include "DolphinQt/HotkeyScheduler.h"
 #include "DolphinQt/InfinityBase/InfinityBaseWindow.h"
@@ -125,6 +126,7 @@
 #include "DolphinQt/Scripting/InputDisplayController.h"
 #include "DolphinQt/Scripting/ScriptWindowManager.h"
 #include "DolphinQt/Scripting/ScriptingWidget.h"
+#include "Scripting/ControlPipe.h"
 #include "DolphinQt/QtUtils/QueueOnObject.h"
 #include "DolphinQt/QtUtils/RunOnObject.h"
 #include "DolphinQt/QtUtils/WindowActivationEventFilter.h"
@@ -143,6 +145,7 @@
 #include "DolphinQt/WiiUpdate.h"
 
 #include "UICommon/DiscordPresence.h"
+#include "DiscIO/Enums.h"
 #include "UICommon/GameFile.h"
 #include "UICommon/ResourcePack/Manager.h"
 #include "UICommon/ResourcePack/ResourcePack.h"
@@ -614,6 +617,8 @@ MainWindow::MainWindow(Core::System& system, std::unique_ptr<BootParameters> boo
 
   Host::GetInstance()->SetMainWindowHandle(reinterpret_cast<void*>(winId()));
 
+  StartControlPipe();
+
   if (m_pending_boot != nullptr)
   {
     StartGame(std::move(m_pending_boot));
@@ -621,8 +626,54 @@ MainWindow::MainWindow(Core::System& system, std::unique_ptr<BootParameters> boo
   }
 }
 
+static std::string PlatformToString(DiscIO::Platform platform)
+{
+  switch (platform)
+  {
+  case DiscIO::Platform::GameCubeDisc: return "GC";
+  case DiscIO::Platform::Triforce:     return "Triforce";
+  case DiscIO::Platform::WiiDisc:      return "Wii";
+  case DiscIO::Platform::WiiWAD:       return "WiiWAD";
+  case DiscIO::Platform::ELFOrDOL:     return "ELF/DOL";
+  default:                             return "Unknown";
+  }
+}
+
+// Bridge the control pipe to operations only DolphinQt can do, marshaling onto the GUI thread.
+void MainWindow::StartControlPipe()
+{
+  Scripting::HostHooks hooks;
+  hooks.boot = [this](const std::string& path) {
+    QueueOnObject(this, [this, path] { StartGame(path, ScanForSecondDisc::Yes); });
+  };
+  // ForceStop, not RequestStop: a pipe client can't answer the "Confirm on Stop" dialog.
+  hooks.stop = [this] { QueueOnObject(this, [this] { ForceStop(); }); };
+  hooks.reset = [this] { QueueOnObject(this, [this] { Reset(); }); };
+  hooks.list_games = [this] {
+    std::vector<Scripting::GameEntry> games;
+    QueueOnObjectBlocking(this, [this, &games] {
+      const auto& model = m_game_list->GetGameListModel();
+      const int rows = model.rowCount(QModelIndex());
+      games.reserve(rows);
+      for (int i = 0; i < rows; ++i)
+      {
+        const auto game = model.GetGameFile(i);
+        if (!game)
+          continue;
+        games.push_back({game->GetGameID(), game->GetLongName(), game->GetFilePath(),
+                         PlatformToString(game->GetPlatform()),
+                         DiscIO::GetName(game->GetRegion(), false)});
+      }
+    });
+    return games;
+  };
+  Scripting::StartControlPipe(m_system, std::move(hooks));
+}
+
 MainWindow::~MainWindow()
 {
+  Scripting::StopControlPipe();
+
   // Shut down NetPlay first to avoid race condition segfault
   Settings::Instance().ResetNetPlayClient();
   Settings::Instance().ResetNetPlayServer();
