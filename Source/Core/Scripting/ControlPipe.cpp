@@ -37,8 +37,15 @@ namespace Scripting
 
 namespace
 {
-constexpr wchar_t PIPE_NAME[] = L"\\\\.\\pipe\\DolphinControl";
 constexpr DWORD PIPE_BUF = 4096;
+
+// Per-process pipe name so multiple Dolphin instances each get their own channel.
+const wchar_t* PipeName()
+{
+  static const std::wstring name =
+      L"\\\\.\\pipe\\DolphinControl-" + std::to_wstring(GetCurrentProcessId());
+  return name.c_str();
+}
 
 Core::System* s_system = nullptr;
 std::atomic<bool> s_running{false};
@@ -713,7 +720,7 @@ void PipeServerThread(Core::System* system)
   while (s_running.load())
   {
     HANDLE pipe = CreateNamedPipeW(
-        PIPE_NAME,
+        PipeName(),
         PIPE_ACCESS_DUPLEX,
         PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
         1,
@@ -797,7 +804,7 @@ void StopControlPipe()
   if (!s_running.exchange(false))
     return;
 
-  HANDLE h = CreateFileW(PIPE_NAME, GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+  HANDLE h = CreateFileW(PipeName(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
   if (h != INVALID_HANDLE_VALUE)
     CloseHandle(h);
 
