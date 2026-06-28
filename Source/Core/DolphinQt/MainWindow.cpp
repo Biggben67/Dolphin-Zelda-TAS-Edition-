@@ -107,6 +107,7 @@
 #include "DolphinQt/EmulatedUSB/LogitechMicWindow.h"
 #include "DolphinQt/EmulatedUSB/WiiSpeakWindow.h"
 #include "DolphinQt/FIFO/FIFOPlayerWindow.h"
+#include "DolphinQt/FrameDumpManager.h"
 #include "DolphinQt/GBAWidget.h"
 #include "DolphinQt/GCMemcardManager.h"
 #include "DolphinQt/GameList/GameList.h"
@@ -153,6 +154,7 @@
 #include "UICommon/UICommon.h"
 
 #include "VideoCommon/NetPlayChatUI.h"
+#include "VideoCommon/OnScreenDisplay.h"
 
 #ifdef HAVE_XRANDR
 #include "UICommon/X11Utils.h"
@@ -437,6 +439,43 @@ static QList<WindowSectionEntry> ReadWindowSectionEntries(const QString& path)
       entries.push_back({preset, window, std::move(widths)});
   }
 
+  return entries;
+}
+
+// Ordered, resize-aware TAS layouts use a separate record so width-only presets remain compatible.
+struct WindowLayoutEntry
+{
+  QString preset;
+  QString window;
+  std::string state;
+};
+
+static QList<WindowLayoutEntry> ReadWindowLayoutEntries(const QString& path)
+{
+  QList<WindowLayoutEntry> entries;
+  QFile file(path);
+  if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
+    return entries;
+
+  const QString suffix = QStringLiteral("#layout");
+  QTextStream in(&file);
+  while (!in.atEnd())
+  {
+    const QString line = in.readLine().trimmed();
+    const QStringList parts = line.split(QLatin1Char(','));
+    if (parts.size() < 3)
+      continue;
+
+    const QString tag = parts[parts.size() - 2].trimmed();
+    if (!tag.endsWith(suffix))
+      continue;
+
+    const QString window = tag.left(tag.size() - suffix.size());
+    const QString preset = parts.mid(0, parts.size() - 2).join(QLatin1Char(',')).trimmed();
+    const std::string state = parts[parts.size() - 1].trimmed().toStdString();
+    if (!preset.isEmpty() && !window.isEmpty() && !state.empty())
+      entries.push_back({preset, window, state});
+  }
   return entries;
 }
 
@@ -901,6 +940,7 @@ void MainWindow::ConnectMenuBar()
   connect(m_menu_bar, &MenuBar::ShowResourcePackManager, this,
           &MainWindow::ShowResourcePackManager);
   connect(m_menu_bar, &MenuBar::ShowCheatsManager, this, &MainWindow::ShowCheatsManager);
+  connect(m_menu_bar, &MenuBar::ShowFrameDumpManager, this, &MainWindow::ShowFrameDumpManager);
   connect(m_menu_bar, &MenuBar::BootGameCubeIPL, this, &MainWindow::OnBootGameCubeIPL);
   connect(m_menu_bar, &MenuBar::ImportNANDBackup, this, &MainWindow::OnImportNANDBackup);
   connect(m_menu_bar, &MenuBar::PerformOnlineUpdate, this, &MainWindow::PerformOnlineUpdate);
@@ -930,7 +970,6 @@ void MainWindow::ConnectMenuBar()
   connect(m_menu_bar, &MenuBar::ShowTASInput, this, &MainWindow::ShowTASInput);
   connect(m_menu_bar, &MenuBar::ShowDTMEditor, this, &MainWindow::ShowDTMEditor);
   connect(m_menu_bar, &MenuBar::ShowInputDisplay, this, &MainWindow::OnShowInputDisplay);
-  connect(m_menu_bar, &MenuBar::DumpControllerInputs, this, &MainWindow::OnDumpControllerInputs);
 
   connect(m_menu_bar, &MenuBar::ConfigureOSD, this, &MainWindow::ShowOSDWindow);
 
@@ -1740,6 +1779,13 @@ void MainWindow::SaveWindowPreset()
                                        }),
                         section_entries.end());
 
+  QList<WindowLayoutEntry> layout_entries = ReadWindowLayoutEntries(WindowPresetsPath());
+  layout_entries.erase(std::remove_if(layout_entries.begin(), layout_entries.end(),
+                                      [&trimmed_name](const WindowLayoutEntry& entry) {
+                                        return entry.preset == trimmed_name;
+                                      }),
+                       layout_entries.end());
+
   auto add_section_entry = [&](const QString& window_key, TASInputWindow* window) {
     if (!window)
       return;
@@ -1747,6 +1793,13 @@ void MainWindow::SaveWindowPreset()
     if (widths.empty())
       return;
     section_entries.push_back({trimmed_name, window_key, std::move(widths)});
+  };
+
+  auto add_layout_entry = [&](const QString& window_key, TASInputWindow* window) {
+    if (!window)
+      return;
+    std::string state = window->GetLayoutState();
+    layout_entries.push_back({trimmed_name, window_key, std::move(state)});
   };
 
   auto add_window_entry = [&](const QString& window_key, const QWidget* window) {
@@ -1781,18 +1834,21 @@ void MainWindow::SaveWindowPreset()
     const QString key = MakeWindowPresetKey(QStringLiteral("GCTAS"), i);
     add_window_entry(key, m_gc_tas_input_windows[i]);
     add_section_entry(key, m_gc_tas_input_windows[i]);
+    add_layout_entry(key, m_gc_tas_input_windows[i]);
   }
   for (int i = 0; i < static_cast<int>(m_gba_tas_input_windows.size()); ++i)
   {
     const QString key = MakeWindowPresetKey(QStringLiteral("GBATAS"), i);
     add_window_entry(key, m_gba_tas_input_windows[i]);
     add_section_entry(key, m_gba_tas_input_windows[i]);
+    add_layout_entry(key, m_gba_tas_input_windows[i]);
   }
   for (int i = 0; i < static_cast<int>(m_wii_tas_input_windows.size()); ++i)
   {
     const QString key = MakeWindowPresetKey(QStringLiteral("WiiTAS"), i);
     add_window_entry(key, m_wii_tas_input_windows[i]);
     add_section_entry(key, m_wii_tas_input_windows[i]);
+    add_layout_entry(key, m_wii_tas_input_windows[i]);
   }
 #ifdef HAS_LIBMGBA
   for (int i = 0; i < num_gc_controllers; ++i)
@@ -1824,6 +1880,11 @@ void MainWindow::SaveWindowPreset()
     for (const auto& [key, width] : entry.widths)
       pairs << QStringLiteral("%1:%2").arg(QString::fromStdString(key)).arg(width);
     out << entry.preset << ',' << entry.window << "#sections," << pairs.join(QLatin1Char('|'))
+        << '\n';
+  }
+  for (const auto& entry : layout_entries)
+  {
+    out << entry.preset << ',' << entry.window << "#layout," << QString::fromStdString(entry.state)
         << '\n';
   }
 
@@ -2015,6 +2076,39 @@ void MainWindow::ApplyWindowPreset(const QString& preset_name, bool warn_if_miss
     if (window)
     {
       window->ApplySectionWidths(entry.widths);
+      applied = true;
+    }
+  }
+
+  const QList<WindowLayoutEntry> layout_entries = ReadWindowLayoutEntries(WindowPresetsPath());
+  for (const auto& entry : layout_entries)
+  {
+    if (entry.preset != preset_name)
+      continue;
+
+    TASInputWindow* window = nullptr;
+    if (entry.window.startsWith(QStringLiteral("GCTAS")))
+    {
+      const int index = entry.window.mid(5).toInt() - 1;
+      if (index >= 0 && index < static_cast<int>(m_gc_tas_input_windows.size()))
+        window = m_gc_tas_input_windows[index];
+    }
+    else if (entry.window.startsWith(QStringLiteral("GBATAS")))
+    {
+      const int index = entry.window.mid(6).toInt() - 1;
+      if (index >= 0 && index < static_cast<int>(m_gba_tas_input_windows.size()))
+        window = m_gba_tas_input_windows[index];
+    }
+    else if (entry.window.startsWith(QStringLiteral("WiiTAS")))
+    {
+      const int index = entry.window.mid(6).toInt() - 1;
+      if (index >= 0 && index < static_cast<int>(m_wii_tas_input_windows.size()))
+        window = m_wii_tas_input_windows[index];
+    }
+
+    if (window)
+    {
+      window->ApplyLayoutState(entry.state);
       applied = true;
     }
   }
@@ -2632,6 +2726,12 @@ void MainWindow::OnPlayRecording()
     emit ReadOnlyModeChanged(true);
   }
 
+  // Posted pre-boot, so go straight to OSD; Core::DisplayMessage would drop it while stopped.
+  if (!Config::Get(Config::MAIN_MOVIE_CLEAR_SAVES_ON_PLAYBACK))
+    OSD::AddMessage("Warning: \"Delete Saves Before Movie Playback\" is off - playback may desync. "
+                    "Enable it under Options > Advanced > Movie.",
+                    OSD::Duration::VERY_LONG);
+
   std::optional<std::string> savestate_path;
   if (movie.PlayInput(dtm_file.toStdString(), &savestate_path))
   {
@@ -2672,6 +2772,12 @@ void MainWindow::OnStartRecording()
       controllers[i] = Movie::ControllerType::None;
     wiimotes[i] = Config::Get(Config::GetInfoForWiimoteSource(i)) != WiimoteSource::None;
   }
+
+  // Recording can start before boot, so go straight to OSD to survive the running-state guard.
+  if (!Config::Get(Config::MAIN_MOVIE_CLEAR_SAVES_ON_RECORDING))
+    OSD::AddMessage("Warning: \"Delete Saves Before Movie Recording\" is off - stale saves can "
+                    "cause desyncs. Enable it under Options > Advanced > Movie.",
+                    OSD::Duration::VERY_LONG);
 
   if (movie.BeginRecordingInput(controllers, wiimotes))
   {
@@ -2779,23 +2885,13 @@ void MainWindow::OnShowInputDisplay(bool show)
             [this] { m_menu_bar->SetInputDisplayChecked(false); });
   }
   if (show)
-    m_input_display->Show();
-  else
-    m_input_display->Hide();
-}
-
-void MainWindow::OnDumpControllerInputs(bool dump)
-{
-  if (!m_input_display)
   {
-    m_input_display = std::make_unique<InputDisplayController>();
-    connect(m_input_display.get(), &InputDisplayController::closed, this,
-            [this] { m_menu_bar->SetInputDisplayChecked(false); });
+    m_input_display->Show();
   }
-  if (dump)
-    m_input_display->StartDump();
   else
-    m_input_display->StopDump();
+  {
+    m_input_display->Hide();
+  }
 }
 
 void MainWindow::OnConnectWiiRemote(int id)
@@ -2853,6 +2949,16 @@ void MainWindow::ShowResourcePackManager()
   ResourcePackManager manager(this);
 
   manager.exec();
+}
+
+void MainWindow::ShowFrameDumpManager()
+{
+  if (!m_frame_dump_manager)
+    m_frame_dump_manager = new FrameDumpManager(this);
+
+  m_frame_dump_manager->show();
+  m_frame_dump_manager->raise();
+  m_frame_dump_manager->activateWindow();
 }
 
 void MainWindow::ShowCheatsManager()
