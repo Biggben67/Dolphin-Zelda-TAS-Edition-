@@ -146,6 +146,19 @@ void ScriptWindowManager::Sync()
         connect(slider, &QSlider::valueChanged, this, [cid, smin, smax](int v) {
           API::GetGui().SetValue(cid, smin + (smax - smin) * (v / 1000.0f));
         });
+        // Init the handle from the model value (QSlider otherwise pins to its minimum) so a
+        // script's starting value -- e.g. a bipolar slider centered at 0 -- is honored on load.
+        if (smax > smin)
+        {
+          int iv = int((child.value - smin) / (smax - smin) * 1000.0f + 0.5f);
+          iv = iv < 0 ? 0 : (iv > 1000 ? 1000 : iv);
+          slider->setValue(iv);
+        }
+        // Right-click recenters the slider to the midpoint of its range (e.g. 0 on a
+        // bipolar −x..+x slider); valueChanged then pushes the new value to the model.
+        slider->setContextMenuPolicy(Qt::CustomContextMenu);
+        connect(slider, &QSlider::customContextMenuRequested, this,
+                [slider](const QPoint&) { slider->setValue(500); });
         w = slider;
         break;
       }
@@ -194,6 +207,16 @@ void ScriptWindowManager::Sync()
       if (child.kind == API::Gui::WidgetKind::Text)
         if (auto* lbl = qobject_cast<QLabel*>(cit->second.control))
           lbl->setText(QString::fromStdString(child.label));
+      // Reflect model->widget (the signal path is one-way widget->model) so a script-driven
+      // change -- e.g. forcing a checkbox off for mutual exclusion -- shows; block to avoid echo.
+      if (child.kind == API::Gui::WidgetKind::Checkbox)
+        if (auto* box = qobject_cast<QCheckBox*>(cit->second.control))
+          if (box->isChecked() != child.checked)
+          {
+            box->blockSignals(true);
+            box->setChecked(child.checked);
+            box->blockSignals(false);
+          }
       cit->second.control->setVisible(child.visible);
       if (cit->second.caption)
         cit->second.caption->setVisible(child.visible);
