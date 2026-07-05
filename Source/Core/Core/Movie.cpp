@@ -431,6 +431,11 @@ std::string MovieManager::GetRTCDisplay() const
 {
   using ExpansionInterface::CEXIIPL;
 
+  // Cosmetic OSD path: in the brief window where determinism is set but the movie isn't active yet
+  // (movie boot/end), GetEmulatedTime would assert, so skip the read for those frames.
+  if (Core::WantsDeterminism() && !IsMovieActive())
+    return "Date/Time: --";
+
   const time_t current_time = CEXIIPL::GetEmulatedTime(m_system, CEXIIPL::UNIX_EPOCH);
   const tm gm_time = fmt::gmtime(current_time);
 

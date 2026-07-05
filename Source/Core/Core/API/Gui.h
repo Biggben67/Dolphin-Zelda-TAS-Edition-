@@ -132,15 +132,19 @@ public:
     bool inside = false;
     bool clicked = false;       // latched until CanvasTakeClick
     float click_x = 0.0f, click_y = 0.0f;
+    bool right_clicked = false;  // latched until CanvasTakeRightClick
+    float right_click_x = 0.0f, right_click_y = 0.0f;
     float wheel_accum = 0.0f;   // accumulated wheel notches until CanvasTakeWheel
   };
   void CanvasReportMouse(WidgetId id, float x, float y, bool inside);  // Qt thread
   void CanvasReportClick(WidgetId id, float x, float y);               // Qt thread
+  void CanvasReportRightClick(WidgetId id, float x, float y);          // Qt thread
   void CanvasReportWheel(WidgetId id, float delta);                    // Qt thread
   void CanvasReportSize(WidgetId id, int w, int h);                    // Qt thread
   std::pair<int, int> CanvasSize(WidgetId id);                        // script thread
   Vec2f CanvasMousePos(WidgetId id, bool& inside);                     // script thread
   bool CanvasTakeClick(WidgetId id, Vec2f& pos);                       // script thread, consumes
+  bool CanvasTakeRightClick(WidgetId id, Vec2f& pos);                  // script thread, consumes
   float CanvasTakeWheel(WidgetId id);                                  // script thread, consumes
 
   WidgetId GetOrCreateWindow(void* owner, const std::string& title, bool embedded = true);

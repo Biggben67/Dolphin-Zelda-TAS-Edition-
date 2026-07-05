@@ -38,6 +38,11 @@ class Button:
 
 class SliderFloat:
     visible: bool
+    # Read (live, follows the handle) / write. A write is honored as the INITIAL handle
+    # position when the widget is built -- set it right after creation to choose where the
+    # handle starts (e.g. value = 0.0 to center a bipolar -x..+x slider). Later writes
+    # update the model but do NOT move the handle (no per-frame slider sync). Right-click
+    # the slider to recenter it to the midpoint of its range.
     value: float
 
 class Text:
@@ -46,6 +51,8 @@ class Text:
 
 class Checkbox:
     visible: bool
+    # Read/write. A write is reflected on the widget each frame, so a script can drive the
+    # box programmatically -- e.g. force one off to keep two checkboxes mutually exclusive.
     checked: bool
 
 class InputText:
@@ -101,6 +108,7 @@ class Canvas:
     # Coordinates are canvas pixels. Reads lag input by up to one Qt poll interval.
     def mouse_pos(self) -> Tuple[float, float, bool]: ...           # (x, y, inside)
     def take_click(self) -> Optional[Tuple[float, float]]: ...      # last unconsumed left-click, consumes it
+    def take_right_click(self) -> Optional[Tuple[float, float]]: ... # last unconsumed right-click, consumes it
     def take_wheel(self) -> float: ...                              # accumulated wheel notches (+ = up), consumes
 
 def canvas(title: str, width: int, height: int, *, embedded: bool = False, overlay: bool = False) -> Canvas: ...

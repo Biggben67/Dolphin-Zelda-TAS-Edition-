@@ -73,6 +73,8 @@ void ScriptCanvasWidget::mousePressEvent(QMouseEvent* event)
   const QPointF p = event->position();
   if (event->button() == Qt::LeftButton)
     API::GetGui().CanvasReportClick(m_id, static_cast<float>(p.x()), static_cast<float>(p.y()));
+  else if (event->button() == Qt::RightButton)
+    API::GetGui().CanvasReportRightClick(m_id, static_cast<float>(p.x()), static_cast<float>(p.y()));
   API::GetGui().CanvasReportMouse(m_id, static_cast<float>(p.x()), static_cast<float>(p.y()), true);
 }
 
