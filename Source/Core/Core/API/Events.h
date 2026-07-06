@@ -100,6 +100,7 @@ public:
 
   ListenerID<T> ListenEvent(Listener<T> listener)
   {
+    std::lock_guard lock{m_listeners_iterate_mutex};
     auto id = ListenerID<T>{m_next_listener_id++};
     m_listener_pairs.emplace_back(std::pair<ListenerID<T>, Listener<T>>(id, std::move(listener)));
     return id;
@@ -107,6 +108,7 @@ public:
 
   bool UnlistenEvent(ListenerID<T> listener_id)
   {
+    std::lock_guard lock{m_listeners_iterate_mutex};
     for (auto it = m_listener_pairs.begin(); it != m_listener_pairs.end(); ++it)
     {
       if (it->first.value == listener_id.value)
@@ -120,6 +122,7 @@ public:
 
   void ListenEventOnce(Listener<T> listener)
   {
+    std::lock_guard lock{m_listeners_iterate_mutex};
     m_one_time_listeners.emplace_back(std::move(listener));
   }
 
@@ -128,7 +131,9 @@ public:
     std::lock_guard lock{m_listeners_iterate_mutex};
   }
 private:
-  std::mutex m_listeners_iterate_mutex{};
+  // Recursive: EmitEvent holds this across listener calls, and a listener may re-register on the
+  // same thread (e.g. a coroutine re-arming its one-time frameadvance listener on resume).
+  std::recursive_mutex m_listeners_iterate_mutex{};
   std::vector<std::pair<ListenerID<T>, Listener<T>>> m_listener_pairs{};
   std::vector<Listener<T>> m_one_time_listeners{};
   u64 m_next_listener_id = 0;

@@ -13,6 +13,7 @@
 
 #include "Core/API/Events.h"
 #include "Core/API/Gui.h"
+#include "Scripting/ScriptList.h"
 
 static constexpr int POLL_INTERVAL_MS = 33;
 static constexpr int HOST_UPDATE_INTERVAL_MS = 16;  // ~60Hz heartbeat for scripts
@@ -42,8 +43,12 @@ ScriptWindowManager::ScriptWindowManager(QObject* parent) : QObject(parent)
   connect(&m_timer, &QTimer::timeout, this, &ScriptWindowManager::Sync);
   m_timer.start(POLL_INTERVAL_MS);
 
-  connect(&m_host_update_timer, &QTimer::timeout, this,
-          [] { API::GetEventHub().EmitEvent(API::Events::HostUpdate{}); });
+  connect(&m_host_update_timer, &QTimer::timeout, this, [] {
+    // Skip while a backend is constructing: this timer fires re-entrantly from the enable path's
+    // event-loop pump, and emitting into a half-built subinterpreter crashes.
+    if (!Scripts::IsConstructing())
+      API::GetEventHub().EmitEvent(API::Events::HostUpdate{});
+  });
   m_host_update_timer.start(HOST_UPDATE_INTERVAL_MS);
 }
 
@@ -55,6 +60,10 @@ ScriptWindowManager::~ScriptWindowManager()
 
 void ScriptWindowManager::Sync()
 {
+  // Materializing/snapshotting a window mid-construction races the ctor building the widget tree.
+  if (Scripts::IsConstructing())
+    return;
+
   API::Gui& gui = API::GetGui();
 
   const std::vector<API::Gui::WindowInfo> snapshots = gui.SnapshotDetachedWindows();

@@ -41,10 +41,16 @@ std::string ScriptsDir();
 // Registered once at startup so non-GUI callers (the pipe) can refresh the Scripts panel.
 void SetChangeCallback(std::function<void()> callback);
 
+// True while a backend ctor is in flight; GUI-thread pollers must skip work that would re-enter a
+// still-initializing script (the enable path pumps the Qt event loop from inside the ctor wait).
+bool IsConstructing();
+
 // extern so that different translation units can access a global instance of these vars
 // i.e. DolphinLib needs to access these variables even though they're housed in the Scripting unit
 extern std::unordered_map<std::string, Scripting::ScriptingBackend*> g_scripts;
 extern bool g_scripts_started;
 // Guards all g_scripts/g_scripts_started access now that the control pipe is a third mutator.
-extern std::mutex g_scripts_mutex;
+// Recursive: enabling from the Scripts tab holds this on the GUI thread while the backend ctor
+// pumps the Qt event loop, and the repainted script list re-enters via IsEnabled()/List().
+extern std::recursive_mutex g_scripts_mutex;
 }

@@ -4,6 +4,7 @@
 
 #include "Scripting/ScriptList.h"
 
+#include <atomic>
 #include <filesystem>
 #include <map>
 #include <system_error>
@@ -15,6 +16,27 @@ namespace Scripts
 namespace
 {
 std::function<void()> s_on_change;
+
+// Nonzero while a backend ctor runs; the GUI-thread enable path pumps the Qt event loop from inside
+// the ctor wait, so GUI pollers must not re-enter a half-built subinterpreter.
+std::atomic<int> s_constructing{0};
+
+Scripting::ScriptingBackend* NewBackend(const std::string& key)
+{
+  ++s_constructing;
+  auto* backend = new Scripting::ScriptingBackend(key);
+  --s_constructing;
+  return backend;
+}
+
+// Destruction also marshals onto the CPU thread and, from the GUI, pumps the event loop while it
+// waits -- guard it like construction so the window Sync and HostUpdate tick skip a tearing-down script.
+void DeleteBackend(Scripting::ScriptingBackend* backend)
+{
+  ++s_constructing;
+  delete backend;
+  --s_constructing;
+}
 
 // Fire the registered refresh callback off-lock (it may marshal onto the GUI thread).
 void NotifyChanged()
@@ -61,7 +83,7 @@ void StartPendingScripts()
   for (auto it = g_scripts.begin(); it != g_scripts.end(); it++)
   {
     if (!it->second)
-      it->second = new Scripting::ScriptingBackend(it->first);
+      it->second = NewBackend(it->first);
   }
   g_scripts_started = true;
 }
@@ -75,7 +97,7 @@ void StopAllScripts()
   {
     if (it->second)
     {
-      delete it->second;
+      DeleteBackend(it->second);
       it->second = nullptr;
     }
   }
@@ -96,14 +118,14 @@ bool SetEnabled(const std::string& path, bool enabled)
         // Construct under the lock: the backend ctor marshals onto the CPU thread, which never
         // takes this mutex, so there is no deadlock and the map stays consistent.
         Scripting::ScriptingBackend* backend =
-            g_scripts_started ? new Scripting::ScriptingBackend(NormalizeKey(path)) : nullptr;
+            g_scripts_started ? NewBackend(NormalizeKey(path)) : nullptr;
         g_scripts[NormalizeKey(path)] = backend;
         changed = true;
       }
     }
     else if (it != g_scripts.end())
     {
-      delete it->second;
+      DeleteBackend(it->second);
       g_scripts.erase(it);
       changed = true;
     }
@@ -122,8 +144,8 @@ bool Restart(const std::string& path)
     if (it != g_scripts.end() && it->second != nullptr)
     {
       const std::string key = it->first;
-      delete it->second;
-      it->second = new Scripting::ScriptingBackend(key);
+      DeleteBackend(it->second);
+      it->second = NewBackend(key);
       changed = true;
     }
   }
@@ -191,7 +213,12 @@ void SetChangeCallback(std::function<void()> callback)
   s_on_change = std::move(callback);
 }
 
+bool IsConstructing()
+{
+  return s_constructing.load(std::memory_order_relaxed) != 0;
+}
+
 std::unordered_map<std::string, Scripting::ScriptingBackend*> g_scripts = {};
 bool g_scripts_started = false;
-std::mutex g_scripts_mutex;
+std::recursive_mutex g_scripts_mutex;
 }  // namespace Scripts
