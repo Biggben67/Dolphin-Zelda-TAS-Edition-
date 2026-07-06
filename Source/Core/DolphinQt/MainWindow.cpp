@@ -656,7 +656,8 @@ MainWindow::MainWindow(Core::System& system, std::unique_ptr<BootParameters> boo
 
   Host::GetInstance()->SetMainWindowHandle(reinterpret_cast<void*>(winId()));
 
-  StartControlPipe();
+  if (Config::Get(Config::MAIN_ENABLE_CONTROL_PIPE))
+    StartControlPipe();
 
   if (m_pending_boot != nullptr)
   {
@@ -716,6 +717,17 @@ void MainWindow::StartControlPipe()
     QueueOnObject(this, [this, dtm, game] { PipePlayMovie(dtm, game); });
   };
   Scripting::StartControlPipe(m_system, std::move(hooks));
+}
+
+void MainWindow::SetControlPipeEnabled(bool enabled)
+{
+  if (enabled == Scripting::IsControlPipeRunning())
+    return;
+  if (enabled)
+    StartControlPipe();
+  else
+    Scripting::StopControlPipe();  // also releases any inputs a client left held
+  OSD::AddMessage(enabled ? "Control pipe enabled" : "Control pipe disabled", 3000);
 }
 
 // Dialog-free, path-driven variants of OnStart/Stop/PlayRecording for the control pipe.
@@ -2502,6 +2514,9 @@ void MainWindow::NetPlayInit()
   Discord::InitNetPlayFunctionality(*m_netplay_discord);
   m_netplay_discord->Start();
 #endif
+  connect(&Settings::Instance(), &Settings::ConfigChanged, this, [this] {
+    SetControlPipeEnabled(Config::Get(Config::MAIN_ENABLE_CONTROL_PIPE));
+  });
   connect(&Settings::Instance(), &Settings::ConfigChanged, this,
           &MainWindow::UpdateScreenSaverInhibition);
   connect(&Settings::Instance(), &Settings::EmulationStateChanged, this,

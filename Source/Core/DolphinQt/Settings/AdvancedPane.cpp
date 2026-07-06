@@ -335,6 +335,18 @@ void AdvancedPane::CreateLayout()
          "recording starts, so the run begins from a clean save and stays in sync."));
   movie_group->layout()->addWidget(clear_saves_on_recording);
 
+  auto* automation_group = new QGroupBox(tr("Automation"));
+  automation_group->setLayout(new QVBoxLayout());
+  main_layout->addWidget(automation_group);
+
+  auto* const enable_control_pipe =
+      new ConfigBool(tr("Enable Control Pipe"), Config::MAIN_ENABLE_CONTROL_PIPE);
+  enable_control_pipe->SetDescription(
+      tr("Runs a local named-pipe server that lets external tools drive the emulator (input, "
+         "boot/stop, save states, movies). Disabling it releases any input a client left "
+         "held.<br><br><dolphin_emphasis>If unsure, leave this unchecked.</dolphin_emphasis>"));
+  automation_group->layout()->addWidget(enable_control_pipe);
+
   auto* reset_group = new QGroupBox(tr("Reset Dolphin Settings"));
   reset_group->setLayout(new QVBoxLayout());
   main_layout->addWidget(reset_group);

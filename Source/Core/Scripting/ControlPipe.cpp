@@ -7,23 +7,34 @@
 
 #include <array>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <cinttypes>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
 #include <windows.h>
 
+#include "Common/Event.h"
 #include "Common/Logging/LogManager.h"
 #include "Core/API/Events.h"
 #include "Core/Core.h"
+#include "Core/HW/CPU.h"
 #include "Core/HW/GCPad.h"
 #include "Core/HW/GCPadEmu.h"
 #include "Core/Movie.h"
+#include "Core/PowerPC/BreakPoints.h"
+#include "Core/PowerPC/Expression.h"
+#include "Core/PowerPC/Gekko.h"
+#include "Core/PowerPC/MMU.h"
+#include "Core/PowerPC/PowerPC.h"
 #include "Core/State.h"
 #include "Core/System.h"
 #include "InputCommon/ControllerEmu/ControlGroup/Buttons.h"
@@ -134,6 +145,13 @@ bool WriteString(HANDLE pipe, const std::string& s)
   return WriteRaw(pipe, s.c_str(), static_cast<int>(s.size()));
 }
 
+bool WriteResponseWithPC(HANDLE pipe, const char* state, u32 pc)
+{
+  char buf[96];
+  int len = snprintf(buf, sizeof(buf), "{\"ok\":true,\"state\":\"%s\",\"pc\":%u}\n", state, pc);
+  return WriteRaw(pipe, buf, len);
+}
+
 // Append s to out as a JSON string body (no surrounding quotes), escaping the minimum needed.
 void AppendJsonEscaped(std::string& out, const std::string& s)
 {
@@ -195,6 +213,50 @@ bool ParseStringField(const char* buf, const char* key, char* out, int outlen)
     out[i++] = *p++;
   out[i] = '\0';
   return i > 0;
+}
+
+// Advance past "key" and its value separator, returning the start of the value (or nullptr).
+const char* ValueAfter(const char* buf, const char* key)
+{
+  const char* p = strstr(buf, key);
+  if (!p)
+    return nullptr;
+  p += strlen(key);
+  while (*p == ' ' || *p == ':' || *p == '"')
+    p++;
+  return p;
+}
+
+// Parse an unsigned field, accepting hex (0x...) or decimal. Addresses arrive either way.
+bool ParseU64Field(const char* buf, const char* key, u64& out)
+{
+  const char* p = ValueAfter(buf, key);
+  if (!p)
+    return false;
+  out = strtoull(p, nullptr, 0);
+  return true;
+}
+
+// Parse a bool field, accepting JSON true/false or 0/1. Missing key yields def.
+bool ParseBoolField(const char* buf, const char* key, bool def)
+{
+  const char* p = ValueAfter(buf, key);
+  if (!p)
+    return def;
+  if (strncmp(p, "true", 4) == 0)
+    return true;
+  if (strncmp(p, "false", 5) == 0)
+    return false;
+  return strtoll(p, nullptr, 10) != 0;
+}
+
+bool ParseDoubleField(const char* buf, const char* key, double& out)
+{
+  const char* p = ValueAfter(buf, key);
+  if (!p)
+    return false;
+  out = strtod(p, nullptr);
+  return true;
 }
 
 struct PadOverride
@@ -386,9 +448,165 @@ static bool ParseSequence(const char* buf, std::vector<SeqElement>& out)
   return !out.empty();
 }
 
+// --- Debugger: registers, breakpoints, stepping ---
+
+enum class RegKind
+{
+  GPR,
+  FPR,
+  SPR,
+  PC,
+  NPC,
+  LR,
+  CTR,
+  MSR,
+  CR,
+  XER,
+  FPSCR,
+  SRR0,
+  SRR1,
+};
+
+struct RegRef
+{
+  RegKind kind;
+  u32 index = 0;
+};
+
+// Resolve a register name (case-insensitive) to a kind + index. Accepts pc/npc/lr/ctr/msr/cr/
+// xer/fpscr/srr0/srr1, gprN or rN (sp=r1), fprN or fN, sprN.
+bool ParseRegName(const char* name, RegRef& out)
+{
+  std::string n;
+  for (const char* c = name; *c; ++c)
+    n += static_cast<char>(std::tolower(static_cast<unsigned char>(*c)));
+
+  // Parse the digits following a prefix; returns false unless the whole tail is digits.
+  auto tail_index = [&n](size_t pfx, u32 limit, u32& idx) -> bool {
+    if (n.size() <= pfx)
+      return false;
+    for (size_t i = pfx; i < n.size(); ++i)
+      if (!std::isdigit(static_cast<unsigned char>(n[i])))
+        return false;
+    idx = static_cast<u32>(strtoul(n.c_str() + pfx, nullptr, 10));
+    return idx < limit;
+  };
+
+  u32 idx = 0;
+  if (n == "pc") { out = {RegKind::PC}; return true; }
+  if (n == "npc") { out = {RegKind::NPC}; return true; }
+  if (n == "lr") { out = {RegKind::LR}; return true; }
+  if (n == "ctr") { out = {RegKind::CTR}; return true; }
+  if (n == "msr") { out = {RegKind::MSR}; return true; }
+  if (n == "cr") { out = {RegKind::CR}; return true; }
+  if (n == "xer") { out = {RegKind::XER}; return true; }
+  if (n == "fpscr") { out = {RegKind::FPSCR}; return true; }
+  if (n == "srr0") { out = {RegKind::SRR0}; return true; }
+  if (n == "srr1") { out = {RegKind::SRR1}; return true; }
+  if (n == "sp") { out = {RegKind::GPR, 1}; return true; }
+  if (n.rfind("gpr", 0) == 0 && tail_index(3, 32, idx)) { out = {RegKind::GPR, idx}; return true; }
+  if (n[0] == 'r' && tail_index(1, 32, idx)) { out = {RegKind::GPR, idx}; return true; }
+  if (n.rfind("fpr", 0) == 0 && tail_index(3, 32, idx)) { out = {RegKind::FPR, idx}; return true; }
+  if (n[0] == 'f' && tail_index(1, 32, idx)) { out = {RegKind::FPR, idx}; return true; }
+  if (n.rfind("spr", 0) == 0 && tail_index(3, 1024, idx)) { out = {RegKind::SPR, idx}; return true; }
+  return false;
+}
+
+// Read a register. Must run on the CPU thread. Sets is_fpr + dbl for float registers.
+bool ReadReg(PowerPC::PowerPCState& st, const RegRef& r, u64& raw, double& dbl, bool& is_fpr)
+{
+  is_fpr = false;
+  switch (r.kind)
+  {
+  case RegKind::GPR:   raw = st.gpr[r.index]; return true;
+  case RegKind::FPR:   raw = st.ps[r.index].PS0AsU64(); dbl = st.ps[r.index].PS0AsDouble();
+                       is_fpr = true; return true;
+  case RegKind::SPR:   raw = st.spr[r.index]; return true;
+  case RegKind::PC:    raw = st.pc; return true;
+  case RegKind::NPC:   raw = st.npc; return true;
+  case RegKind::LR:    raw = LR(st); return true;
+  case RegKind::CTR:   raw = CTR(st); return true;
+  case RegKind::MSR:   raw = st.msr.Hex; return true;
+  case RegKind::CR:    raw = st.cr.Get(); return true;
+  case RegKind::XER:   raw = st.GetXER().Hex; return true;
+  case RegKind::FPSCR: raw = st.fpscr.Hex; return true;
+  case RegKind::SRR0:  raw = SRR0(st); return true;
+  case RegKind::SRR1:  raw = SRR1(st); return true;
+  }
+  return false;
+}
+
+// Write a register. Must run on the CPU thread. For FPRs, has_double picks SetPS0(double) vs raw bits.
+bool WriteReg(PowerPC::PowerPCState& st, const RegRef& r, u64 val, bool has_double, double dval)
+{
+  const auto v32 = static_cast<u32>(val);
+  switch (r.kind)
+  {
+  case RegKind::GPR:   st.gpr[r.index] = v32; return true;
+  case RegKind::FPR:   if (has_double) st.ps[r.index].SetPS0(dval); else st.ps[r.index].SetPS0(val);
+                       return true;
+  case RegKind::SPR:   st.spr[r.index] = v32; return true;
+  case RegKind::PC:    st.pc = v32; st.npc = v32; return true;  // redirect flow: keep npc in step
+  case RegKind::NPC:   st.npc = v32; return true;
+  case RegKind::LR:    LR(st) = v32; return true;
+  case RegKind::CTR:   CTR(st) = v32; return true;
+  case RegKind::MSR:   st.msr.Hex = v32; return true;
+  case RegKind::CR:    st.cr.Set(v32); return true;
+  case RegKind::XER:   st.SetXER(UReg_XER{v32}); return true;
+  case RegKind::FPSCR: st.fpscr.Hex = v32; return true;
+  case RegKind::SRR0:  SRR0(st) = v32; return true;
+  case RegKind::SRR1:  SRR1(st) = v32; return true;
+  }
+  return false;
+}
+
+// True on a rfi, blr, or a bclr that would return (ported from CodeWidget::WillInstructionReturn).
+bool WillInstructionReturn(Core::System& system, UGeckoInstruction inst)
+{
+  if (inst.hex == 0x4C000064u)
+    return true;
+  const auto& ppc_state = system.GetPPCState();
+  const bool counter =
+      (inst.BO_2 >> 2 & 1) != 0 || (CTR(ppc_state) != 0) != ((inst.BO_2 >> 1 & 1) != 0);
+  const bool condition = inst.BO_2 >> 4 != 0 || ppc_state.cr.GetBit(inst.BI_2) == (inst.BO_2 >> 3 & 1);
+  const bool is_bclr = inst.OPCD_7 == 0b010011 && inst.XO == 16;
+  return is_bclr && counter && condition && !inst.LK_3;
+}
+
+// Single-step one instruction (interpreter). Requires the core to be stepping; breaks first if not.
+// Mirrors CodeWidget::Step — runs on the pipe thread, signaling the parked CPU thread.
+void DoStepInto(Core::System* system)
+{
+  auto& cpu = system->GetCPU();
+  if (!cpu.IsStepping())
+    cpu.SetStepping(true);
+
+  auto& power_pc = system->GetPowerPC();
+  const PowerPC::CoreMode old_mode = power_pc.GetMode();
+  power_pc.SetMode(PowerPC::CoreMode::Interpreter);
+  Common::Event sync_event;
+  cpu.StepOpcode(&sync_event);
+  sync_event.WaitFor(std::chrono::milliseconds(200));
+  power_pc.SetMode(old_mode);
+}
+
+// Read PC after a synchronous step. The core is parked in stepping, so a direct read is race-free.
+u32 CurrentPC(Core::System* system)
+{
+  return system->GetPPCState().pc;
+}
+
+// Handles the debugger commands; returns true if buf was one. Declared here, defined below.
+bool HandleDebugRequest(HANDLE pipe, const char* buf, Core::System* system, Core::State state);
+
 void HandleRequest(HANDLE pipe, const char* buf, Core::System* system)
 {
   Core::State state = Core::GetState(*system);
+
+  // Dispatched first: a breakpoint's free-text condition could otherwise contain another
+  // command's name and mis-route through the substring matching below.
+  if (HandleDebugRequest(pipe, buf, system, state))
+    return;
 
   if (strstr(buf, "\"ping\""))
   {
@@ -760,6 +978,416 @@ void HandleRequest(HANDLE pipe, const char* buf, Core::System* system)
   }
 }
 
+bool HandleDebugRequest(HANDLE pipe, const char* buf, Core::System* system, Core::State state)
+{
+  if (strstr(buf, "\"setbp\""))
+  {
+    u64 addr = 0;
+    if (state == Core::State::Uninitialized || !ParseU64Field(buf, "\"addr\"", addr))
+    {
+      WriteResponse(pipe, false, StateToString(state));
+    }
+    else
+    {
+      const bool brk = ParseBoolField(buf, "\"break_on_hit\"", true);
+      const bool log = ParseBoolField(buf, "\"log_on_hit\"", false);
+      char cond[256] = {};
+      std::optional<Expression> expr;
+      if (ParseStringField(buf, "\"condition\"", cond, sizeof(cond)))
+        expr = Expression::TryParse(std::string_view(cond));
+      Core::RunOnCPUThread(
+          *system,
+          [&] {
+            system->GetPowerPC().GetBreakPoints().Add(static_cast<u32>(addr), brk, log,
+                                                      std::move(expr));
+          },
+          true);
+      WriteResponse(pipe, true, StateToString(state));
+    }
+  }
+  else if (strstr(buf, "\"removebp\""))
+  {
+    u64 addr = 0;
+    bool ok = false;
+    if (state != Core::State::Uninitialized && ParseU64Field(buf, "\"addr\"", addr))
+    {
+      Core::RunOnCPUThread(
+          *system,
+          [&] { ok = system->GetPowerPC().GetBreakPoints().Remove(static_cast<u32>(addr)); }, true);
+    }
+    WriteResponse(pipe, ok, StateToString(state));
+  }
+  else if (strstr(buf, "\"clearbp\""))
+  {
+    if (state == Core::State::Uninitialized)
+    {
+      WriteResponse(pipe, false, StateToString(state));
+    }
+    else
+    {
+      Core::RunOnCPUThread(
+          *system, [&] { system->GetPowerPC().GetBreakPoints().Clear(); }, true);
+      WriteResponse(pipe, true, StateToString(state));
+    }
+  }
+  else if (strstr(buf, "\"listbp\""))
+  {
+    struct BpInfo
+    {
+      u32 addr;
+      bool enabled, brk, log, cond;
+    };
+    std::vector<BpInfo> infos;
+    if (state != Core::State::Uninitialized)
+    {
+      Core::RunOnCPUThread(
+          *system,
+          [&] {
+            for (const auto& bp : system->GetPowerPC().GetBreakPoints().GetBreakPoints())
+              infos.push_back({bp.address, bp.is_enabled, bp.break_on_hit, bp.log_on_hit,
+                               bp.condition.has_value()});
+          },
+          true);
+    }
+    std::string resp = "{\"ok\":true,\"breakpoints\":[";
+    bool first = true;
+    for (const auto& b : infos)
+    {
+      if (!first)
+        resp += ',';
+      first = false;
+      char item[160];
+      snprintf(item, sizeof(item),
+               "{\"addr\":%u,\"enabled\":%s,\"break\":%s,\"log\":%s,\"condition\":%s}", b.addr,
+               b.enabled ? "true" : "false", b.brk ? "true" : "false", b.log ? "true" : "false",
+               b.cond ? "true" : "false");
+      resp += item;
+    }
+    resp += "]}\n";
+    WriteString(pipe, resp);
+  }
+  else if (strstr(buf, "\"setmbp\""))
+  {
+    u64 at = 0, start = 0, end = 0;
+    const bool has_at = ParseU64Field(buf, "\"at\"", at);
+    const bool has_range = ParseU64Field(buf, "\"start\"", start) &&
+                           ParseU64Field(buf, "\"end\"", end);
+    if (state == Core::State::Uninitialized || (!has_at && !has_range))
+    {
+      WriteResponse(pipe, false, StateToString(state));
+    }
+    else
+    {
+      TMemCheck check;
+      if (has_at)
+      {
+        check.start_address = check.end_address = static_cast<u32>(at);
+        check.is_ranged = false;
+      }
+      else
+      {
+        check.start_address = static_cast<u32>(start);
+        check.end_address = static_cast<u32>(end);
+        check.is_ranged = true;
+      }
+      check.is_break_on_read = ParseBoolField(buf, "\"read\"", true);
+      check.is_break_on_write = ParseBoolField(buf, "\"write\"", true);
+      check.log_on_hit = ParseBoolField(buf, "\"log_on_hit\"", false);
+      check.break_on_hit = ParseBoolField(buf, "\"break_on_hit\"", true);
+      check.is_enabled = true;
+      char cond[256] = {};
+      if (ParseStringField(buf, "\"condition\"", cond, sizeof(cond)))
+        check.condition = Expression::TryParse(std::string_view(cond));
+      Core::RunOnCPUThread(
+          *system, [&] { system->GetPowerPC().GetMemChecks().Add(std::move(check)); }, true);
+      WriteResponse(pipe, true, StateToString(state));
+    }
+  }
+  else if (strstr(buf, "\"removembp\""))
+  {
+    u64 addr = 0;
+    if (state == Core::State::Uninitialized || !ParseU64Field(buf, "\"addr\"", addr))
+    {
+      WriteResponse(pipe, false, StateToString(state));
+    }
+    else
+    {
+      Core::RunOnCPUThread(
+          *system, [&] { system->GetPowerPC().GetMemChecks().Remove(static_cast<u32>(addr)); },
+          true);
+      WriteResponse(pipe, true, StateToString(state));
+    }
+  }
+  else if (strstr(buf, "\"clearmbp\""))
+  {
+    if (state == Core::State::Uninitialized)
+    {
+      WriteResponse(pipe, false, StateToString(state));
+    }
+    else
+    {
+      Core::RunOnCPUThread(
+          *system, [&] { system->GetPowerPC().GetMemChecks().Clear(); }, true);
+      WriteResponse(pipe, true, StateToString(state));
+    }
+  }
+  else if (strstr(buf, "\"listmbp\""))
+  {
+    struct McInfo
+    {
+      u32 start, end, hits;
+      bool ranged, read, write, log, brk, enabled, cond;
+    };
+    std::vector<McInfo> infos;
+    if (state != Core::State::Uninitialized)
+    {
+      Core::RunOnCPUThread(
+          *system,
+          [&] {
+            for (const auto& mc : system->GetPowerPC().GetMemChecks().GetMemChecks())
+              infos.push_back({mc.start_address, mc.end_address, mc.num_hits, mc.is_ranged,
+                               mc.is_break_on_read, mc.is_break_on_write, mc.log_on_hit,
+                               mc.break_on_hit, mc.is_enabled, mc.condition.has_value()});
+          },
+          true);
+    }
+    std::string resp = "{\"ok\":true,\"membreakpoints\":[";
+    bool first = true;
+    for (const auto& m : infos)
+    {
+      if (!first)
+        resp += ',';
+      first = false;
+      char item[256];
+      snprintf(item, sizeof(item),
+               "{\"start\":%u,\"end\":%u,\"ranged\":%s,\"read\":%s,\"write\":%s,\"break\":%s,"
+               "\"log\":%s,\"enabled\":%s,\"condition\":%s,\"hits\":%u}",
+               m.start, m.end, m.ranged ? "true" : "false", m.read ? "true" : "false",
+               m.write ? "true" : "false", m.brk ? "true" : "false", m.log ? "true" : "false",
+               m.enabled ? "true" : "false", m.cond ? "true" : "false", m.hits);
+      resp += item;
+    }
+    resp += "]}\n";
+    WriteString(pipe, resp);
+  }
+  else if (strstr(buf, "\"stepover\""))
+  {
+    auto& cpu = system->GetCPU();
+    if (state == Core::State::Uninitialized)
+    {
+      WriteResponse(pipe, false, StateToString(state));
+    }
+    else
+    {
+      if (!cpu.IsStepping())
+        cpu.SetStepping(true);
+      const u32 pc = system->GetPPCState().pc;
+      UGeckoInstruction inst;
+      {
+        Core::CPUThreadGuard guard(*system);
+        inst = PowerPC::MMU::HostRead_Instruction(guard, pc);
+      }
+      if (inst.LK)
+      {
+        // A call: break at the return address and resume; the client polls status for "paused".
+        system->GetPowerPC().GetBreakPoints().SetTemporary(pc + 4);
+        cpu.SetStepping(false);
+        char resp[96];
+        int len = snprintf(resp, sizeof(resp),
+                           "{\"ok\":true,\"state\":\"running\",\"stepping_over\":true,\"target\":%u}\n",
+                           pc + 4);
+        WriteRaw(pipe, resp, len);
+      }
+      else
+      {
+        DoStepInto(system);
+        WriteResponseWithPC(pipe, "paused", CurrentPC(system));
+      }
+    }
+  }
+  else if (strstr(buf, "\"stepout\""))
+  {
+    if (state == Core::State::Uninitialized)
+    {
+      WriteResponse(pipe, false, StateToString(state));
+    }
+    else
+    {
+      auto& cpu = system->GetCPU();
+      if (!cpu.IsStepping())
+        cpu.SetStepping(true);
+
+      using clock = std::chrono::steady_clock;
+      const clock::time_point timeout = clock::now() + std::chrono::seconds(5);
+      auto& power_pc = system->GetPowerPC();
+      {
+        auto& ppc_state = power_pc.GetPPCState();
+        Core::CPUThreadGuard guard(*system);
+        const PowerPC::CoreMode old_mode = power_pc.GetMode();
+        power_pc.SetMode(PowerPC::CoreMode::Interpreter);
+
+        UGeckoInstruction inst = PowerPC::MMU::HostRead_Instruction(guard, ppc_state.pc);
+        do
+        {
+          if (WillInstructionReturn(*system, inst))
+          {
+            power_pc.SingleStep();
+            break;
+          }
+          if (inst.LK)
+          {
+            const u32 next_pc = ppc_state.pc + 4;
+            do
+            {
+              power_pc.SingleStep();
+            } while (ppc_state.pc != next_pc && clock::now() < timeout &&
+                     !power_pc.CheckBreakPoints());
+          }
+          else
+          {
+            power_pc.SingleStep();
+          }
+          inst = PowerPC::MMU::HostRead_Instruction(guard, ppc_state.pc);
+        } while (clock::now() < timeout && !power_pc.CheckBreakPoints());
+
+        power_pc.SetMode(old_mode);
+      }
+      WriteResponseWithPC(pipe, "paused", CurrentPC(system));
+    }
+  }
+  else if (strstr(buf, "\"stepin\""))
+  {
+    if (state == Core::State::Uninitialized)
+    {
+      WriteResponse(pipe, false, StateToString(state));
+    }
+    else
+    {
+      DoStepInto(system);
+      WriteResponseWithPC(pipe, "paused", CurrentPC(system));
+    }
+  }
+  else if (strstr(buf, "\"readreg\""))
+  {
+    char name[32] = {};
+    RegRef ref;
+    if (state == Core::State::Uninitialized ||
+        !ParseStringField(buf, "\"reg\"", name, sizeof(name)) || !ParseRegName(name, ref))
+    {
+      WriteResponse(pipe, false, StateToString(state));
+    }
+    else
+    {
+      u64 raw = 0;
+      double dbl = 0.0;
+      bool is_fpr = false;
+      Core::RunOnCPUThread(
+          *system, [&] { ReadReg(system->GetPPCState(), ref, raw, dbl, is_fpr); }, true);
+      char resp[192];
+      if (is_fpr)
+        snprintf(resp, sizeof(resp),
+                 "{\"ok\":true,\"reg\":\"%s\",\"bits\":%" PRIu64 ",\"double\":%.17g}\n", name, raw,
+                 dbl);
+      else
+        snprintf(resp, sizeof(resp), "{\"ok\":true,\"reg\":\"%s\",\"value\":%" PRIu64 "}\n", name,
+                 raw);
+      WriteString(pipe, resp);
+    }
+  }
+  else if (strstr(buf, "\"writereg\""))
+  {
+    char name[32] = {};
+    RegRef ref;
+    u64 val = 0;
+    double dval = 0.0;
+    const bool has_double = ParseDoubleField(buf, "\"double\"", dval);
+    ParseU64Field(buf, "\"value\"", val);
+    bool ok = false;
+    if (state != Core::State::Uninitialized &&
+        ParseStringField(buf, "\"reg\"", name, sizeof(name)) && ParseRegName(name, ref))
+    {
+      Core::RunOnCPUThread(
+          *system, [&] { ok = WriteReg(system->GetPPCState(), ref, val, has_double, dval); }, true);
+    }
+    WriteResponse(pipe, ok, StateToString(state));
+  }
+  else if (strstr(buf, "\"regs\""))
+  {
+    if (state == Core::State::Uninitialized)
+    {
+      WriteResponse(pipe, false, StateToString(state));
+    }
+    else
+    {
+      const bool want_fpr = strstr(buf, "\"fpr\"") != nullptr;
+      struct Dump
+      {
+        u32 pc, npc, lr, ctr, cr, xer, msr, fpscr;
+        u32 gpr[32];
+        u64 ps0[32];
+        double psd[32];
+      } d{};
+      Core::RunOnCPUThread(
+          *system,
+          [&] {
+            auto& st = system->GetPPCState();
+            d.pc = st.pc;
+            d.npc = st.npc;
+            d.lr = LR(st);
+            d.ctr = CTR(st);
+            d.cr = st.cr.Get();
+            d.xer = st.GetXER().Hex;
+            d.msr = st.msr.Hex;
+            d.fpscr = st.fpscr.Hex;
+            for (int i = 0; i < 32; ++i)
+            {
+              d.gpr[i] = st.gpr[i];
+              if (want_fpr)
+              {
+                d.ps0[i] = st.ps[i].PS0AsU64();
+                d.psd[i] = st.ps[i].PS0AsDouble();
+              }
+            }
+          },
+          true);
+      std::string resp = "{\"ok\":true";
+      char hdr[256];
+      snprintf(hdr, sizeof(hdr),
+               ",\"pc\":%u,\"npc\":%u,\"lr\":%u,\"ctr\":%u,\"cr\":%u,\"xer\":%u,\"msr\":%u,"
+               "\"fpscr\":%u,\"gpr\":[",
+               d.pc, d.npc, d.lr, d.ctr, d.cr, d.xer, d.msr, d.fpscr);
+      resp += hdr;
+      for (int i = 0; i < 32; ++i)
+      {
+        if (i)
+          resp += ',';
+        resp += std::to_string(d.gpr[i]);
+      }
+      resp += ']';
+      if (want_fpr)
+      {
+        resp += ",\"fpr\":[";
+        for (int i = 0; i < 32; ++i)
+        {
+          if (i)
+            resp += ',';
+          char f[64];
+          snprintf(f, sizeof(f), "{\"bits\":%" PRIu64 ",\"double\":%.17g}", d.ps0[i], d.psd[i]);
+          resp += f;
+        }
+        resp += ']';
+      }
+      resp += "}\n";
+      WriteString(pipe, resp);
+    }
+  }
+  else
+  {
+    return false;
+  }
+  return true;
+}
+
 void PipeServerThread(Core::System* system)
 {
   while (s_running.load())
@@ -856,8 +1484,21 @@ void StopControlPipe()
   if (s_thread.joinable())
     s_thread.join();
 
+  // Drop any override a client left held so disabling the pipe hands input back to the player.
+  if (s_system)
+  {
+    const PadOverride clear;
+    for (int port = 0; port < 4; ++port)
+      ApplyPadOverrideOnCPU(s_system, port, clear);
+  }
+
   s_hooks = {};
   s_system = nullptr;
+}
+
+bool IsControlPipeRunning()
+{
+  return s_running.load();
 }
 
 }  // namespace Scripting
@@ -868,6 +1509,7 @@ namespace Scripting
 {
 void StartControlPipe(Core::System&, HostHooks) {}
 void StopControlPipe() {}
+bool IsControlPipeRunning() { return false; }
 }  // namespace Scripting
 
 #endif

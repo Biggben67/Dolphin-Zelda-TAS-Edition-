@@ -167,6 +167,7 @@ private:
                  std::unique_ptr<BootSessionData> boot_session_data = nullptr);
   void StartGame(std::unique_ptr<BootParameters>&& parameters);
   void StartControlPipe();
+  void SetControlPipeEnabled(bool enabled);
   void PipeStartRecording(const std::string& save_path);
   void PipeStopRecording(const std::string& save_path);
   void PipePlayMovie(const std::string& dtm, const std::string& game);

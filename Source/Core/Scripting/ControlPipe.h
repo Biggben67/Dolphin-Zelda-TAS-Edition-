@@ -41,6 +41,11 @@ struct HostHooks
 };
 
 void StartControlPipe(Core::System& system, HostHooks hooks = {});
+
+// Stops the server thread and clears any controller overrides a client left held on every port.
 void StopControlPipe();
+
+// True while the pipe server thread is accepting connections.
+bool IsControlPipeRunning();
 
 }  // namespace Scripting
