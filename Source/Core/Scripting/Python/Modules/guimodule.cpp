@@ -388,6 +388,19 @@ static PyObject* canvas_take_click(PyObject* self, PyObject* args)
   return Py_BuildValue("(ff)", pos.x, pos.y);
 }
 
+// Returns (x, y) of the last unconsumed right-click, or None. Consumes it.
+static PyObject* canvas_take_right_click(PyObject* self, PyObject* args)
+{
+  u64 id;
+  if (!PyArg_ParseTuple(args, "K", &id))
+    return nullptr;
+  GuiModuleState* state = Py::GetState<GuiModuleState>(self);
+  Vec2f pos;
+  if (!state->gui->CanvasTakeRightClick(id, pos))
+    Py_RETURN_NONE;
+  return Py_BuildValue("(ff)", pos.x, pos.y);
+}
+
 // Returns current canvas size as (width, height) in pixels.
 static PyObject* canvas_size(PyObject* self, PyObject* args)
 {
@@ -581,6 +594,9 @@ class Canvas:
     def take_click(self):
         # (x, y) of the last unconsumed left-click in canvas pixels, or None. Consumes it.
         return _canvas_take_click(self._id)
+    def take_right_click(self):
+        # (x, y) of the last unconsumed right-click in canvas pixels, or None. Consumes it.
+        return _canvas_take_right_click(self._id)
     def take_wheel(self):
         # Accumulated wheel notches since the last call (positive = scroll up). Consumes it.
         return _canvas_take_wheel(self._id)
@@ -665,6 +681,7 @@ PyMODINIT_FUNC PyInit_gui()
       {"_canvas_size", canvas_size, METH_VARARGS, ""},
       {"_canvas_mouse_pos", canvas_mouse_pos, METH_VARARGS, ""},
       {"_canvas_take_click", canvas_take_click, METH_VARARGS, ""},
+      {"_canvas_take_right_click", canvas_take_right_click, METH_VARARGS, ""},
       {"_canvas_take_wheel", Py::as_py_func<canvas_take_wheel>, METH_VARARGS, ""},
 
       {nullptr, nullptr, 0, nullptr}  // Sentinel

@@ -248,6 +248,15 @@ void Gui::CanvasReportClick(WidgetId id, float x, float y)
   in.click_y = y;
 }
 
+void Gui::CanvasReportRightClick(WidgetId id, float x, float y)
+{
+  std::lock_guard lock(m_widget_mutex);
+  CanvasInput& in = m_canvas_input[id];
+  in.right_clicked = true;
+  in.right_click_x = x;
+  in.right_click_y = y;
+}
+
 void Gui::CanvasReportWheel(WidgetId id, float delta)
 {
   std::lock_guard lock(m_widget_mutex);
@@ -295,6 +304,17 @@ bool Gui::CanvasTakeClick(WidgetId id, Vec2f& pos)
     return false;
   it->second.clicked = false;
   pos = {it->second.click_x, it->second.click_y};
+  return true;
+}
+
+bool Gui::CanvasTakeRightClick(WidgetId id, Vec2f& pos)
+{
+  std::lock_guard lock(m_widget_mutex);
+  auto it = m_canvas_input.find(id);
+  if (it == m_canvas_input.end() || !it->second.right_clicked)
+    return false;
+  it->second.right_clicked = false;
+  pos = {it->second.right_click_x, it->second.right_click_y};
   return true;
 }
 

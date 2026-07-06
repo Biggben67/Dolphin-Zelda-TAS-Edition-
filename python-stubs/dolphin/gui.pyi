@@ -108,6 +108,7 @@ class Canvas:
     # Coordinates are canvas pixels. Reads lag input by up to one Qt poll interval.
     def mouse_pos(self) -> Tuple[float, float, bool]: ...           # (x, y, inside)
     def take_click(self) -> Optional[Tuple[float, float]]: ...      # last unconsumed left-click, consumes it
+    def take_right_click(self) -> Optional[Tuple[float, float]]: ... # last unconsumed right-click, consumes it
     def take_wheel(self) -> float: ...                              # accumulated wheel notches (+ = up), consumes
 
 def canvas(title: str, width: int, height: int, *, embedded: bool = False, overlay: bool = False) -> Canvas: ...
