@@ -1,4 +1,6 @@
 add_library(scripting
+  ControlPipe.cpp
+  ControlPipe.h
   ScriptingEngine.cpp
   ScriptingEngine.h
   ScriptList.cpp

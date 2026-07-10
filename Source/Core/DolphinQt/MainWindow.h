@@ -166,6 +166,11 @@ private:
   void StartGame(const std::vector<std::string>& paths,
                  std::unique_ptr<BootSessionData> boot_session_data = nullptr);
   void StartGame(std::unique_ptr<BootParameters>&& parameters);
+  void StartControlPipe();
+  void SetControlPipeEnabled(bool enabled);
+  void PipeStartRecording(const std::string& save_path);
+  void PipeStopRecording(const std::string& save_path);
+  void PipePlayMovie(const std::string& dtm, const std::string& game);
   void ShowRenderWidget();
   void HideRenderWidget(bool reinit = true, bool is_exit = false);
 
@@ -262,6 +267,7 @@ private:
   bool m_is_screensaver_inhibited = false;
   u32 m_state_slot = 1;
   std::unique_ptr<BootParameters> m_pending_boot;
+  std::string m_pipe_record_path;  // DTM path remembered from a pipe "record start"
 
   SettingsWindow* m_settings_window = nullptr;
   // m_fifo_window doesn't set MainWindow as its parent so that the fifo can be focused without

@@ -39,8 +39,15 @@ ScriptingBackend::~ScriptingBackend() {
   if (m_state != nullptr)
   {
     INFO_LOG_FMT(SCRIPTING, "Shutting down scripting engine...");
-    delete (PyScripting::PyScriptingBackend*)m_state;
-    m_state = nullptr;
+    // Tear down on the CPU thread, mirroring construction: the Python subinterpreter is created
+    // and run there, so destroying it off-thread races CPU-thread script execution and crashes.
+    Core::RunOnCPUThread(
+        Core::System::GetInstance(),
+        [this]() {
+          delete (PyScripting::PyScriptingBackend*)m_state;
+          m_state = nullptr;
+        },
+        true);
   }
 }
 

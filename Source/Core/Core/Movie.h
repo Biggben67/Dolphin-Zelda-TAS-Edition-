@@ -239,6 +239,8 @@ public:
   u64 GetTotalInputCount() const;
   u64 GetCurrentLagCount() const;
   u64 GetTotalLagCount() const;
+  // Monotonic count of controller polls; lets host-thread tools step by input frame.
+  u64 GetPollCount() const;
 
   void SetClearSave(bool enabled);
   void SignalDiscChange(const std::string& new_path);
@@ -346,6 +348,7 @@ private:
 
   bool m_recording_from_save_state = false;
   bool m_polled = false;
+  std::atomic<u64> m_poll_count{0};
 
   std::string m_current_file_name;
   std::string m_movie_path;

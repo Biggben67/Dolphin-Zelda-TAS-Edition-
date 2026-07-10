@@ -918,6 +918,7 @@ void MovieManager::InputUpdate()
 void MovieManager::SetPolledDevice()
 {
   m_polled = true;
+  m_poll_count.fetch_add(1, std::memory_order_relaxed);
 }
 
 // NOTE: Host Thread
@@ -972,6 +973,11 @@ u64 MovieManager::GetRecordingStartTime() const
 u64 MovieManager::GetCurrentFrame() const
 {
   return m_current_frame;
+}
+
+u64 MovieManager::GetPollCount() const
+{
+  return m_poll_count.load(std::memory_order_relaxed);
 }
 
 u64 MovieManager::GetTotalFrames() const
