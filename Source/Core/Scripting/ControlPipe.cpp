@@ -215,6 +215,22 @@ bool ParseStringField(const char* buf, const char* key, char* out, int outlen)
   return i > 0;
 }
 
+bool ParseCommandName(const char* buf, char* out, int outlen)
+{
+  return ParseStringField(buf, "\"cmd\"", out, outlen) ||
+         ParseStringField(buf, "\"command\"", out, outlen);
+}
+
+bool CommandMatches(const char* buf, const char* parsed_command, const char* command)
+{
+  if (parsed_command && parsed_command[0] != '\0')
+    return strcmp(parsed_command, command) == 0;
+
+  char legacy_token[64];
+  snprintf(legacy_token, sizeof(legacy_token), "\"%s\"", command);
+  return strstr(buf, legacy_token) != nullptr;
+}
+
 // Advance past "key" and its value separator, returning the start of the value (or nullptr).
 const char* ValueAfter(const char* buf, const char* key)
 {
@@ -601,6 +617,8 @@ bool HandleDebugRequest(HANDLE pipe, const char* buf, Core::System* system, Core
 
 void HandleRequest(HANDLE pipe, const char* buf, Core::System* system)
 {
+  char command[64] = {};
+  ParseCommandName(buf, command, sizeof(command));
   Core::State state = Core::GetState(*system);
 
   // Dispatched first: a breakpoint's free-text condition could otherwise contain another
@@ -608,12 +626,12 @@ void HandleRequest(HANDLE pipe, const char* buf, Core::System* system)
   if (HandleDebugRequest(pipe, buf, system, state))
     return;
 
-  if (strstr(buf, "\"ping\""))
+  if (CommandMatches(buf, command, "ping"))
   {
     const char* resp = "{\"ok\":true,\"result\":\"pong\"}\n";
     WriteRaw(pipe, resp, static_cast<int>(strlen(resp)));
   }
-  else if (strstr(buf, "\"status\""))
+  else if (CommandMatches(buf, command, "status"))
   {
     auto& movie = system->GetMovie();
     char resp[256];
@@ -624,31 +642,31 @@ void HandleRequest(HANDLE pipe, const char* buf, Core::System* system)
         movie.IsPlayingInput() ? "true" : "false");
     WriteRaw(pipe, resp, len);
   }
-  else if (strstr(buf, "\"pause\""))
+  else if (CommandMatches(buf, command, "pause"))
   {
     Core::SetState(*system, Core::State::Paused);
     WriteResponse(pipe, true, "paused");
   }
-  else if (strstr(buf, "\"resume\""))
+  else if (CommandMatches(buf, command, "resume"))
   {
     Core::SetState(*system, Core::State::Running);
     WriteResponse(pipe, true, "running");
   }
-  else if (strstr(buf, "\"toggle\""))
+  else if (CommandMatches(buf, command, "toggle"))
   {
     Core::State next =
         (state == Core::State::Paused) ? Core::State::Running : Core::State::Paused;
     Core::SetState(*system, next);
     WriteResponse(pipe, true, StateToString(next));
   }
-  else if (strstr(buf, "\"frame\""))
+  else if (CommandMatches(buf, command, "frame"))
   {
     u64 frame = system->GetMovie().GetCurrentFrame();
     char resp[64];
     int len = snprintf(resp, sizeof(resp), "{\"ok\":true,\"frame\":%" PRIu64 "}\n", frame);
     WriteRaw(pipe, resp, len);
   }
-  else if (strstr(buf, "\"advance\""))
+  else if (CommandMatches(buf, command, "advance"))
   {
     long long n = ParseIntField(buf, "\"frames\"");
     if (n <= 0)
@@ -657,7 +675,7 @@ void HandleRequest(HANDLE pipe, const char* buf, Core::System* system)
     u64 landed = StepInputFrames(system, n);
     WriteResponseWithFrame(pipe, true, "paused", landed);
   }
-  else if (strstr(buf, "\"advanceseq\""))
+  else if (CommandMatches(buf, command, "advanceseq"))
   {
     long long port = ParseIntField(buf, "\"port\"");
     int ctrl = static_cast<int>(port < 0 ? 0 : port);
@@ -672,7 +690,7 @@ void HandleRequest(HANDLE pipe, const char* buf, Core::System* system)
       WriteResponseWithFrame(pipe, true, "paused", landed);
     }
   }
-  else if (strstr(buf, "\"advancewith\""))
+  else if (CommandMatches(buf, command, "advancewith"))
   {
     long long n    = ParseIntField(buf, "\"frames\"");
     long long port = ParseIntField(buf, "\"port\"");
@@ -685,7 +703,7 @@ void HandleRequest(HANDLE pipe, const char* buf, Core::System* system)
     u64 landed = RunInputSequence(system, ctrl, seq);
     WriteResponseWithFrame(pipe, true, "paused", landed);
   }
-  else if (strstr(buf, "\"setinput\""))
+  else if (CommandMatches(buf, command, "setinput"))
   {
     long long port = ParseIntField(buf, "\"port\"");
     int ctrl = static_cast<int>(port < 0 ? 0 : port);
@@ -693,7 +711,7 @@ void HandleRequest(HANDLE pipe, const char* buf, Core::System* system)
     ApplyPadOverrideOnCPU(system, ctrl, ov);
     WriteResponse(pipe, true, StateToString(state));
   }
-  else if (strstr(buf, "\"clearinput\""))
+  else if (CommandMatches(buf, command, "clearinput"))
   {
     long long port = ParseIntField(buf, "\"port\"");
     int ctrl = static_cast<int>(port < 0 ? 0 : port);
@@ -701,7 +719,7 @@ void HandleRequest(HANDLE pipe, const char* buf, Core::System* system)
     ApplyPadOverrideOnCPU(system, ctrl, clear_ov);
     WriteResponse(pipe, true, StateToString(state));
   }
-  else if (strstr(buf, "\"savestate\""))
+  else if (CommandMatches(buf, command, "savestate"))
   {
     long long slot = ParseIntField(buf, "\"slot\"");
     char path[512] = {};
@@ -732,16 +750,16 @@ void HandleRequest(HANDLE pipe, const char* buf, Core::System* system)
       WriteResponse(pipe, false, StateToString(state));
     }
   }
-  else if (strstr(buf, "\"enablescript\"") || strstr(buf, "\"disablescript\""))
+  else if (CommandMatches(buf, command, "enablescript") || CommandMatches(buf, command, "disablescript"))
   {
-    const bool enable = strstr(buf, "\"enablescript\"") != nullptr;
+    const bool enable = CommandMatches(buf, command, "enablescript");
     char path[512] = {};
     if (!ParseStringField(buf, "\"path\"", path, sizeof(path)))
       WriteResponse(pipe, false, StateToString(state));
     else
       WriteResponse(pipe, Scripts::SetEnabled(path, enable), StateToString(state));
   }
-  else if (strstr(buf, "\"restartscript\""))
+  else if (CommandMatches(buf, command, "restartscript"))
   {
     char path[512] = {};
     if (!ParseStringField(buf, "\"path\"", path, sizeof(path)))
@@ -749,7 +767,7 @@ void HandleRequest(HANDLE pipe, const char* buf, Core::System* system)
     else
       WriteResponse(pipe, Scripts::Restart(path), StateToString(state));
   }
-  else if (strstr(buf, "\"listscripts\""))
+  else if (CommandMatches(buf, command, "listscripts"))
   {
     std::string resp = "{\"ok\":true,\"dir\":\"";
     AppendJsonEscaped(resp, Scripts::ScriptsDir());
@@ -771,7 +789,7 @@ void HandleRequest(HANDLE pipe, const char* buf, Core::System* system)
     resp += "]}\n";
     WriteString(pipe, resp);
   }
-  else if (strstr(buf, "\"boot\""))
+  else if (CommandMatches(buf, command, "boot"))
   {
     char path[512] = {};
     if (!s_hooks.boot || !ParseStringField(buf, "\"path\"", path, sizeof(path)))
@@ -783,7 +801,7 @@ void HandleRequest(HANDLE pipe, const char* buf, Core::System* system)
       WriteResponse(pipe, true, "booting");
     }
   }
-  else if (strstr(buf, "\"stop\""))
+  else if (CommandMatches(buf, command, "stop"))
   {
     if (!s_hooks.stop)
       WriteResponse(pipe, false, StateToString(state));
@@ -793,7 +811,7 @@ void HandleRequest(HANDLE pipe, const char* buf, Core::System* system)
       WriteResponse(pipe, true, "stopping");
     }
   }
-  else if (strstr(buf, "\"reset\""))
+  else if (CommandMatches(buf, command, "reset"))
   {
     if (!s_hooks.reset)
       WriteResponse(pipe, false, StateToString(state));
@@ -803,7 +821,7 @@ void HandleRequest(HANDLE pipe, const char* buf, Core::System* system)
       WriteResponse(pipe, true, StateToString(state));
     }
   }
-  else if (strstr(buf, "\"listgames\""))
+  else if (CommandMatches(buf, command, "listgames"))
   {
     if (!s_hooks.list_games)
     {
@@ -834,7 +852,7 @@ void HandleRequest(HANDLE pipe, const char* buf, Core::System* system)
       WriteString(pipe, resp);
     }
   }
-  else if (strstr(buf, "\"recordstart\""))
+  else if (CommandMatches(buf, command, "recordstart"))
   {
     char path[512] = {};
     ParseStringField(buf, "\"path\"", path, sizeof(path));  // optional
@@ -846,7 +864,7 @@ void HandleRequest(HANDLE pipe, const char* buf, Core::System* system)
       WriteResponse(pipe, true, StateToString(state));
     }
   }
-  else if (strstr(buf, "\"recordstop\""))
+  else if (CommandMatches(buf, command, "recordstop"))
   {
     char path[512] = {};
     ParseStringField(buf, "\"path\"", path, sizeof(path));  // optional; saved if given
@@ -858,7 +876,7 @@ void HandleRequest(HANDLE pipe, const char* buf, Core::System* system)
       WriteResponse(pipe, true, StateToString(state));
     }
   }
-  else if (strstr(buf, "\"playmovie\""))
+  else if (CommandMatches(buf, command, "playmovie"))
   {
     char dtm[512] = {};
     char game[512] = {};
@@ -873,7 +891,7 @@ void HandleRequest(HANDLE pipe, const char* buf, Core::System* system)
       WriteResponse(pipe, true, "booting");
     }
   }
-  else if (strstr(buf, "\"logconfig\""))
+  else if (CommandMatches(buf, command, "logconfig"))
   {
     auto* lm = Common::Log::LogManager::GetInstance();
     std::string resp = "{\"ok\":true,\"verbosity\":";
@@ -899,7 +917,7 @@ void HandleRequest(HANDLE pipe, const char* buf, Core::System* system)
     resp += "]}\n";
     WriteString(pipe, resp);
   }
-  else if (strstr(buf, "\"logenable\""))
+  else if (CommandMatches(buf, command, "logenable"))
   {
     char channel[64] = {};
     const long long en = ParseIntField(buf, "\"enable\"");
@@ -920,7 +938,7 @@ void HandleRequest(HANDLE pipe, const char* buf, Core::System* system)
     }
     WriteResponse(pipe, ok, StateToString(state));
   }
-  else if (strstr(buf, "\"logverbosity\""))
+  else if (CommandMatches(buf, command, "logverbosity"))
   {
     const long long lvl = ParseIntField(buf, "\"level\"");
     auto* lm = Common::Log::LogManager::GetInstance();
@@ -934,7 +952,7 @@ void HandleRequest(HANDLE pipe, const char* buf, Core::System* system)
       WriteResponse(pipe, false, StateToString(state));
     }
   }
-  else if (strstr(buf, "\"log\""))
+  else if (CommandMatches(buf, command, "log"))
   {
     long long count = ParseIntField(buf, "\"count\"");
     if (count <= 0)
@@ -980,7 +998,9 @@ void HandleRequest(HANDLE pipe, const char* buf, Core::System* system)
 
 bool HandleDebugRequest(HANDLE pipe, const char* buf, Core::System* system, Core::State state)
 {
-  if (strstr(buf, "\"setbp\""))
+  char command[64] = {};
+  ParseCommandName(buf, command, sizeof(command));
+  if (CommandMatches(buf, command, "setbp"))
   {
     u64 addr = 0;
     if (state == Core::State::Uninitialized || !ParseU64Field(buf, "\"addr\"", addr))
@@ -1005,7 +1025,7 @@ bool HandleDebugRequest(HANDLE pipe, const char* buf, Core::System* system, Core
       WriteResponse(pipe, true, StateToString(state));
     }
   }
-  else if (strstr(buf, "\"removebp\""))
+  else if (CommandMatches(buf, command, "removebp"))
   {
     u64 addr = 0;
     bool ok = false;
@@ -1017,7 +1037,7 @@ bool HandleDebugRequest(HANDLE pipe, const char* buf, Core::System* system, Core
     }
     WriteResponse(pipe, ok, StateToString(state));
   }
-  else if (strstr(buf, "\"clearbp\""))
+  else if (CommandMatches(buf, command, "clearbp"))
   {
     if (state == Core::State::Uninitialized)
     {
@@ -1030,7 +1050,7 @@ bool HandleDebugRequest(HANDLE pipe, const char* buf, Core::System* system, Core
       WriteResponse(pipe, true, StateToString(state));
     }
   }
-  else if (strstr(buf, "\"listbp\""))
+  else if (CommandMatches(buf, command, "listbp"))
   {
     struct BpInfo
     {
@@ -1066,7 +1086,7 @@ bool HandleDebugRequest(HANDLE pipe, const char* buf, Core::System* system, Core
     resp += "]}\n";
     WriteString(pipe, resp);
   }
-  else if (strstr(buf, "\"setmbp\""))
+  else if (CommandMatches(buf, command, "setmbp"))
   {
     u64 at = 0, start = 0, end = 0;
     const bool has_at = ParseU64Field(buf, "\"at\"", at);
@@ -1103,7 +1123,7 @@ bool HandleDebugRequest(HANDLE pipe, const char* buf, Core::System* system, Core
       WriteResponse(pipe, true, StateToString(state));
     }
   }
-  else if (strstr(buf, "\"removembp\""))
+  else if (CommandMatches(buf, command, "removembp"))
   {
     u64 addr = 0;
     if (state == Core::State::Uninitialized || !ParseU64Field(buf, "\"addr\"", addr))
@@ -1118,7 +1138,7 @@ bool HandleDebugRequest(HANDLE pipe, const char* buf, Core::System* system, Core
       WriteResponse(pipe, true, StateToString(state));
     }
   }
-  else if (strstr(buf, "\"clearmbp\""))
+  else if (CommandMatches(buf, command, "clearmbp"))
   {
     if (state == Core::State::Uninitialized)
     {
@@ -1131,7 +1151,7 @@ bool HandleDebugRequest(HANDLE pipe, const char* buf, Core::System* system, Core
       WriteResponse(pipe, true, StateToString(state));
     }
   }
-  else if (strstr(buf, "\"listmbp\""))
+  else if (CommandMatches(buf, command, "listmbp"))
   {
     struct McInfo
     {
@@ -1170,7 +1190,7 @@ bool HandleDebugRequest(HANDLE pipe, const char* buf, Core::System* system, Core
     resp += "]}\n";
     WriteString(pipe, resp);
   }
-  else if (strstr(buf, "\"stepover\""))
+  else if (CommandMatches(buf, command, "stepover"))
   {
     auto& cpu = system->GetCPU();
     if (state == Core::State::Uninitialized)
@@ -1205,7 +1225,7 @@ bool HandleDebugRequest(HANDLE pipe, const char* buf, Core::System* system, Core
       }
     }
   }
-  else if (strstr(buf, "\"stepout\""))
+  else if (CommandMatches(buf, command, "stepout"))
   {
     if (state == Core::State::Uninitialized)
     {
@@ -1255,7 +1275,7 @@ bool HandleDebugRequest(HANDLE pipe, const char* buf, Core::System* system, Core
       WriteResponseWithPC(pipe, "paused", CurrentPC(system));
     }
   }
-  else if (strstr(buf, "\"stepin\""))
+  else if (CommandMatches(buf, command, "stepin"))
   {
     if (state == Core::State::Uninitialized)
     {
@@ -1267,7 +1287,7 @@ bool HandleDebugRequest(HANDLE pipe, const char* buf, Core::System* system, Core
       WriteResponseWithPC(pipe, "paused", CurrentPC(system));
     }
   }
-  else if (strstr(buf, "\"readreg\""))
+  else if (CommandMatches(buf, command, "readreg"))
   {
     char name[32] = {};
     RegRef ref;
@@ -1294,7 +1314,7 @@ bool HandleDebugRequest(HANDLE pipe, const char* buf, Core::System* system, Core
       WriteString(pipe, resp);
     }
   }
-  else if (strstr(buf, "\"writereg\""))
+  else if (CommandMatches(buf, command, "writereg"))
   {
     char name[32] = {};
     RegRef ref;
@@ -1311,7 +1331,7 @@ bool HandleDebugRequest(HANDLE pipe, const char* buf, Core::System* system, Core
     }
     WriteResponse(pipe, ok, StateToString(state));
   }
-  else if (strstr(buf, "\"regs\""))
+  else if (CommandMatches(buf, command, "regs"))
   {
     if (state == Core::State::Uninitialized)
     {
@@ -1453,6 +1473,13 @@ void PipeServerThread(Core::System* system)
 
 void StartControlPipe(Core::System& system, HostHooks hooks)
 {
+  if (s_running.exchange(true))
+  {
+    s_system = &system;
+    s_hooks = std::move(hooks);
+    return;
+  }
+
   s_system = &system;
   s_hooks = std::move(hooks);
 
@@ -1468,7 +1495,6 @@ void StartControlPipe(Core::System& system, HostHooks hooks)
     }
   }
 
-  s_running.store(true);
   s_thread = std::thread(PipeServerThread, &system);
 }
 

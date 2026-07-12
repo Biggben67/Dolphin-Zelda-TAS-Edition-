@@ -41,15 +41,6 @@ ScriptingBackend::~ScriptingBackend() {
     INFO_LOG_FMT(SCRIPTING, "Shutting down scripting engine...");
     // Tear down on the CPU thread, mirroring construction: the Python subinterpreter is created
     // and run there, so destroying it off-thread races CPU-thread script execution and crashes.
-<<<<<<< Updated upstream
-    Core::RunOnCPUThread(
-        Core::System::GetInstance(),
-        [this]() {
-          delete (PyScripting::PyScriptingBackend*)m_state;
-          m_state = nullptr;
-        },
-        true);
-=======
     const auto destroy = [this] {
       delete (PyScripting::PyScriptingBackend*)m_state;
       m_state = nullptr;
@@ -58,7 +49,6 @@ ScriptingBackend::~ScriptingBackend() {
       destroy();
     else
       Core::RunOnCPUThread(Core::System::GetInstance(), destroy, true);
->>>>>>> Stashed changes
   }
 }
 

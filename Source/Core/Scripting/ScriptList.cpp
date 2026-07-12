@@ -21,14 +21,6 @@ std::function<void()> s_on_change;
 // the ctor wait, so GUI pollers must not re-enter a half-built subinterpreter.
 std::atomic<int> s_constructing{0};
 
-<<<<<<< Updated upstream
-Scripting::ScriptingBackend* NewBackend(const std::string& key)
-{
-  ++s_constructing;
-  auto* backend = new Scripting::ScriptingBackend(key);
-  --s_constructing;
-  return backend;
-=======
 class ConstructingScope
 {
 public:
@@ -42,21 +34,14 @@ Scripting::ScriptingBackend* NewBackend(const std::string& key)
 {
   ConstructingScope constructing;
   return new Scripting::ScriptingBackend(key);
->>>>>>> Stashed changes
 }
 
 // Destruction also marshals onto the CPU thread and, from the GUI, pumps the event loop while it
 // waits -- guard it like construction so the window Sync and HostUpdate tick skip a tearing-down script.
 void DeleteBackend(Scripting::ScriptingBackend* backend)
 {
-<<<<<<< Updated upstream
-  ++s_constructing;
-  delete backend;
-  --s_constructing;
-=======
   ConstructingScope constructing;
   delete backend;
->>>>>>> Stashed changes
 }
 
 // Fire the registered refresh callback off-lock (it may marshal onto the GUI thread).
