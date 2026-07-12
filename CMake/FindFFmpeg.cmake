@@ -130,17 +130,21 @@ foreach(c ${_FFmpeg_ALL_COMPONENTS})
       IMPORTED_LOCATION ${FFmpeg_LIBRARY_${c}}
       INTERFACE_INCLUDE_DIRECTORIES ${FFmpeg_INCLUDE_${c}}
     )
-    if(_FFmpeg_DEPS_${c})
-      set(deps)
-      foreach(dep ${_FFmpeg_DEPS_${c}})
-        list(APPEND deps FFmpeg::${dep})
-      endforeach()
+    set(deps)
+    foreach(dep ${_FFmpeg_DEPS_${c}})
+      list(APPEND deps FFmpeg::${dep})
+    endforeach()
 
+    if(WIN32 AND c STREQUAL "avcodec")
+      list(APPEND deps mfuuid strmiids)
+    endif()
+
+    if(deps)
       set_target_properties(FFmpeg::${c} PROPERTIES
         INTERFACE_LINK_LIBRARIES "${deps}"
       )
-      unset(deps)
     endif()
+    unset(deps)
   endif()
 endforeach()
 
