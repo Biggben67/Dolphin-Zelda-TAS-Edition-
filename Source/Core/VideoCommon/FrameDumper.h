@@ -31,6 +31,7 @@ public:
 
   // Ensures all rendered frames are queued for encoding.
   void FlushFrameDump();
+  void FlushFrameDump(u64 repeat_ticks);
 
   // Fills the frame dump staging texture with the current XFB texture.
   void DumpCurrentFrame(const AbstractTexture* src_texture,

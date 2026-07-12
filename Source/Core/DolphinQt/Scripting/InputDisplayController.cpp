@@ -132,7 +132,8 @@ void InputDisplayController::OpenPort(int port, const QString& skin_name)
 
   if (m_dump_all_ports && !m_dumpers[port])
   {
-    m_dumpers[port] = std::make_unique<InputDisplayDumper>(skin, port);
+    m_dumpers[port] =
+        std::make_unique<InputDisplayDumper>(skin, port, widget->IsBackgroundRemoved());
     m_dumpers[port]->Start();
     widget->SetDumping(true);
   }
@@ -177,7 +178,8 @@ void InputDisplayController::StartDump()
     const QString& skin_name = m_widget_skins[port];
     if (m_skins.contains(skin_name))
     {
-      m_dumpers[port] = std::make_unique<InputDisplayDumper>(m_skins[skin_name], port);
+      m_dumpers[port] = std::make_unique<InputDisplayDumper>(
+          m_skins[skin_name], port, m_widgets[port]->IsBackgroundRemoved());
       m_dumpers[port]->Start();
       m_widgets[port]->SetDumping(true);
     }
@@ -226,7 +228,8 @@ void InputDisplayController::SetPortDumping(int port, bool dumping)
     if (!m_skins.contains(skin_name))
       return;
 
-    m_dumpers[port] = std::make_unique<InputDisplayDumper>(m_skins[skin_name], port);
+    m_dumpers[port] = std::make_unique<InputDisplayDumper>(
+        m_skins[skin_name], port, m_widgets[port]->IsBackgroundRemoved());
     m_dumpers[port]->Start();
   }
   else if (m_dumpers[port])

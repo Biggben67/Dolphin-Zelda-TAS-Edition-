@@ -336,6 +336,7 @@ extern const Info<bool> MAIN_MOVIE_DUMP_FRAMES_SILENT;
 extern const Info<bool> MAIN_MOVIE_SHOW_INPUT_DISPLAY;
 extern const Info<bool> MAIN_MOVIE_USE_LEGACY_INPUT_DISPLAY;
 extern const Info<bool> MAIN_MOVIE_TURBO_VISUALIZER;
+extern const Info<int> MAIN_MOVIE_INPUT_DISPLAY_VISUAL_DELAY;
 extern const Info<u32> MAIN_MOVIE_LEGACY_INPUT_DISPLAY_COLOR;
 extern const Info<int> MAIN_MOVIE_LEGACY_INPUT_DISPLAY_SIZE;
 extern const Info<bool> MAIN_MOVIE_SHOW_RTC;

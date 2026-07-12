@@ -87,6 +87,7 @@
 #include "VideoCommon/AsyncRequests.h"
 #include "VideoCommon/Fifo.h"
 #include "VideoCommon/FrameDumper.h"
+#include "VideoCommon/FreeLookCamera.h"
 #include "VideoCommon/OnScreenDisplay.h"
 #include "VideoCommon/PerformanceMetrics.h"
 #include "VideoCommon/Present.h"
@@ -160,6 +161,11 @@ void FrameUpdateOnCPUThread()
 {
   if (NetPlay::IsNetPlayRunning())
     NetPlay::NetPlayClient::SendTimeBase();
+}
+
+void OnFrameStart(Core::System& system)
+{
+  g_freelook_camera.UpdateFocusTargetFromMemory(system);
 }
 
 void OnFrameEnd(Core::System& system)

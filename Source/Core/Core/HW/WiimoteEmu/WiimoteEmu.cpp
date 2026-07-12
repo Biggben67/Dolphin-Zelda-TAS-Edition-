@@ -480,6 +480,164 @@ GetPassthroughCameraPoints(ControllerEmu::IRPassthrough* ir_passthrough)
   return camera_points;
 }
 
+static ControlState GetIRRotationOverride(
+    const ControllerEmu::InputOverrideFunction& override_func, std::string_view ir_group_name)
+{
+  if (!override_func)
+    return 0.0;
+
+  return override_func(ir_group_name, Wiimote::IR_ROTATION_OVERRIDE, 0.0).value_or(0.0);
+}
+
+static void ApplyIRRotationAccelerationOverride(
+    WiimoteCommon::AccelData* acceleration,
+    const ControllerEmu::InputOverrideFunction& override_func, std::string_view ir_group_name)
+{
+  if (!acceleration)
+    return;
+
+  const ControlState rotation_degrees = GetIRRotationOverride(override_func, ir_group_name);
+  if (std::abs(rotation_degrees) < 0.001)
+    return;
+
+  const double rotation = rotation_degrees * MathUtil::TAU / 360.0;
+  const Common::Vec3 roll_acceleration{
+      static_cast<float>(std::sin(rotation) * GRAVITY_ACCELERATION), 0.0f,
+      static_cast<float>(std::cos(rotation) * GRAVITY_ACCELERATION)};
+  *acceleration =
+      ConvertAccelData(roll_acceleration, Wiimote::ACCEL_ZERO_G << 2, Wiimote::ACCEL_ONE_G << 2);
+}
+
+static void ApplyIRDataOverrides(std::array<CameraPoint, CameraLogic::NUM_POINTS>* camera_points,
+                                 const ControllerEmu::InputOverrideFunction& override_func,
+                                 std::string_view ir_group_name)
+{
+  if (!camera_points || !override_func)
+    return;
+
+  const ControlState rotation_degrees = GetIRRotationOverride(override_func, ir_group_name);
+  const ControlState distance_meters =
+      std::clamp(override_func(ir_group_name, Wiimote::IR_DISTANCE_OVERRIDE, 2.0).value_or(2.0),
+                 0.1, 10.0);
+
+  if (std::abs(rotation_degrees) < 0.001 && std::abs(distance_meters - 2.0) < 0.001)
+    return;
+
+  int visible_points = 0;
+  double center_x = 0.0;
+  double center_y = 0.0;
+  for (const CameraPoint& point : *camera_points)
+  {
+    if (point.position.x >= CameraLogic::CAMERA_RES_X ||
+        point.position.y >= CameraLogic::CAMERA_RES_Y)
+    {
+      continue;
+    }
+
+    center_x += point.position.x;
+    center_y += point.position.y;
+    ++visible_points;
+  }
+
+  if (visible_points == 0)
+  {
+    center_x = (CameraLogic::CAMERA_RES_X - 1) / 2.0;
+    center_y = (CameraLogic::CAMERA_RES_Y - 1) / 2.0;
+  }
+  else
+  {
+    center_x /= visible_points;
+    center_y /= visible_points;
+  }
+
+  const auto override_center_x = override_func(ir_group_name, Wiimote::IR_RAW_X_OVERRIDE, center_x);
+  const auto override_center_y = override_func(ir_group_name, Wiimote::IR_RAW_Y_OVERRIDE, center_y);
+  if (override_center_x && override_center_y)
+  {
+    if (!std::isfinite(*override_center_x) || !std::isfinite(*override_center_y))
+    {
+      *camera_points = DesiredWiimoteState::DEFAULT_CAMERA;
+      return;
+    }
+
+    center_x = std::clamp(*override_center_x, ControlState(0),
+                          ControlState(CameraLogic::CAMERA_RES_X - 1));
+    center_y = std::clamp(*override_center_y, ControlState(0),
+                          ControlState(CameraLogic::CAMERA_RES_Y - 1));
+  }
+
+  const double rotation = rotation_degrees * MathUtil::TAU / 360.0;
+  const double sin_rotation = std::sin(rotation);
+  const double cos_rotation = std::cos(rotation);
+
+  if (std::abs(rotation_degrees) >= 0.001)
+  {
+    // Games commonly use accelerometer roll to rotate the interpreted IR position around the
+    // screen center. Feed them the opposite midpoint shift so the visible pointer remains pinned
+    // to the TAS IR position while only the sensor bar angle changes.
+    const double camera_center_x = (CameraLogic::CAMERA_RES_X - 1) / 2.0;
+    const double camera_center_y = (CameraLogic::CAMERA_RES_Y - 1) / 2.0;
+    const double offset_x = center_x - camera_center_x;
+    const double offset_y = center_y - camera_center_y;
+    center_x = camera_center_x + offset_x * cos_rotation - offset_y * sin_rotation;
+    center_y = camera_center_y + offset_x * sin_rotation + offset_y * cos_rotation;
+    center_x = std::clamp(center_x, 0.0, CameraLogic::CAMERA_RES_X - 1.0);
+    center_y = std::clamp(center_y, 0.0, CameraLogic::CAMERA_RES_Y - 1.0);
+  }
+
+  const double half_point_separation =
+      CameraLogic::SENSOR_BAR_LED_SEPARATION * CameraLogic::CAMERA_RES_X /
+      (4.0 * std::tan(CameraLogic::CAMERA_FOV_X / 2.0) * distance_meters);
+
+  double delta_x = half_point_separation * cos_rotation;
+  double delta_y = half_point_separation * sin_rotation;
+
+  const auto fit_scale_for_axis = [](double center, double delta, double max) {
+    const double magnitude = std::abs(delta);
+    if (magnitude <= 0.001)
+      return 1.0;
+
+    const double room = std::max(0.0, std::min(center, max - center));
+    if (magnitude <= room)
+      return 1.0;
+
+    return room / magnitude;
+  };
+
+  const double edge_fit_scale =
+      std::min(fit_scale_for_axis(center_x, delta_x, CameraLogic::CAMERA_RES_X - 1.0),
+               fit_scale_for_axis(center_y, delta_y, CameraLogic::CAMERA_RES_Y - 1.0));
+  delta_x *= edge_fit_scale;
+  delta_y *= edge_fit_scale;
+
+  double point_1_x = center_x - delta_x;
+  double point_1_y = center_y - delta_y;
+  double point_2_x = center_x + delta_x;
+  double point_2_y = center_y + delta_y;
+
+  point_1_x = std::clamp(point_1_x, 0.0, CameraLogic::CAMERA_RES_X - 1.0);
+  point_1_y = std::clamp(point_1_y, 0.0, CameraLogic::CAMERA_RES_Y - 1.0);
+  point_2_x = std::clamp(point_2_x, 0.0, CameraLogic::CAMERA_RES_X - 1.0);
+  point_2_y = std::clamp(point_2_y, 0.0, CameraLogic::CAMERA_RES_Y - 1.0);
+
+  const auto point_size = static_cast<u8>(std::clamp<long>(
+      std::lround(2.37 * std::pow(distance_meters, -0.778)), 3, CameraLogic::MAX_POINT_SIZE));
+
+  *camera_points = DesiredWiimoteState::DEFAULT_CAMERA;
+  (*camera_points)[0] =
+      CameraPoint({static_cast<u16>(std::lround(point_1_x)),
+                   static_cast<u16>(std::lround(point_1_y))},
+                  point_size);
+  (*camera_points)[1] =
+      CameraPoint({static_cast<u16>(std::lround(point_2_x)),
+                   static_cast<u16>(std::lround(point_2_y))},
+                  point_size);
+
+  // Preserve object order. Reordering the points by X rewrites the requested roll angle whenever
+  // the sensor bar crosses a vertical orientation, and it also makes live TAS display feedback
+  // disagree with the raw camera data we just synthesized.
+}
+
 void Wiimote::BuildDesiredWiimoteState(DesiredWiimoteState* target_state,
                                        SensorBarState sensor_bar_state)
 {
@@ -501,6 +659,8 @@ void Wiimote::BuildDesiredWiimoteState(DesiredWiimoteState* target_state,
   // Calibration values are 8-bit but we want 10-bit precision, so << 2.
   target_state->acceleration =
       ConvertAccelData(GetTotalAcceleration(), ACCEL_ZERO_G << 2, ACCEL_ONE_G << 2);
+  ApplyIRRotationAccelerationOverride(&target_state->acceleration, m_input_override_function,
+                                      m_ir->name);
 
   // Calculate IR camera state.
   if (m_ir_passthrough->enabled.GetValue() && m_ir_passthrough->AreInputsBound())
@@ -515,6 +675,7 @@ void Wiimote::BuildDesiredWiimoteState(DesiredWiimoteState* target_state,
 
     target_state->camera_points = CameraLogic::GetCameraPoints(GetTotalTransformation(),
                                                                field_of_view);
+    ApplyIRDataOverrides(&target_state->camera_points, m_input_override_function, m_ir->name);
   }
   else
   {
@@ -602,6 +763,12 @@ void Wiimote::Update(const WiimoteEmu::DesiredWiimoteState& target_state)
     m_motion_plus.Update(manipulated_state.extension);
   }
 
+  // Keep the IR camera register state synchronized with acceleration and other input state even
+  // when the current report does not include IR data. This matters for frame advance because games
+  // may receive the new roll value before the next IR-bearing report, and stale compensated IR
+  // points can temporarily send the interpreted cursor far from the intended TAS position.
+  m_camera_logic.Update(manipulated_state.camera_points);
+
   // Returns true if a report was sent.
   if (ProcessExtensionPortEvent())
   {
@@ -653,10 +820,6 @@ void Wiimote::SendDataReport(const DesiredWiimoteState& target_state)
   // IR Camera:
   if (rpt_builder.HasIR())
   {
-    // Note: Camera logic currently contains no changing state so we can just update it here.
-    // If that changes this should be moved to Wiimote::Update();
-    m_camera_logic.Update(target_state.camera_points);
-
     // The real wiimote reads camera data from the i2c bus starting at offset 0x37:
     const u8 camera_data_offset =
         CameraLogic::REPORT_DATA_OFFSET + rpt_builder.GetIRDataFormatOffset();

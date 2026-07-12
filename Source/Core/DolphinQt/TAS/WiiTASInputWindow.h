@@ -12,6 +12,7 @@ class QHideEvent;
 class QShowEvent;
 class QSpinBox;
 class ScriptFavoritesWidget;
+class IRWidget;
 class StickWidget;
 class TASCheckBox;
 class TASSpinBox;
@@ -56,6 +57,7 @@ private:
   void UpdateInputOverrideFunction();
   void ApplyBatteryOverrideFromUI();
   void UpdateFavoritesWidgetHeight();
+  bool IsCustomIRDataActive() const;
 
   WiimoteEmu::ExtensionNumber m_active_extension = WiimoteEmu::ExtensionNumber::NONE;
   int m_attachment_callback_id = -1;
@@ -97,6 +99,9 @@ private:
   TASCheckBox* m_classic_right_button;
   TASSpinBox* m_ir_x_value;
   TASSpinBox* m_ir_y_value;
+  TASSpinBox* m_ir_rotation_value = nullptr;
+  TASSpinBox* m_ir_distance_value = nullptr;
+  IRWidget* m_ir_widget = nullptr;
   QCheckBox* m_ir_offscreen = nullptr;
   QCheckBox* m_ir_instant_point = nullptr;
   TASSpinBox* m_remote_accelerometer_x_value = nullptr;
@@ -121,6 +126,7 @@ private:
   QGroupBox* m_remote_gyroscope_box;
   QGroupBox* m_nunchuk_accelerometer_box;
   QGroupBox* m_ir_box;
+  QGroupBox* m_ir_data_box = nullptr;
   QGroupBox* m_nunchuk_stick_box;
   QGroupBox* m_classic_left_stick_box;
   QGroupBox* m_classic_right_stick_box;

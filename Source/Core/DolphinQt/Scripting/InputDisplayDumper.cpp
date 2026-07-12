@@ -4,15 +4,29 @@
 
 #include "DolphinQt/Scripting/InputDisplayDumper.h"
 
+#include <algorithm>
+
 #include <QPainter>
 
 #include <fmt/format.h>
 
 #include "Common/CommonPaths.h"
+#include "Core/Config/MainSettings.h"
 #include "Core/CoreTiming.h"
 #include "Core/Movie.h"
 #include "Core/System.h"
 #include "InputCommon/GCPadStatus.h"
+
+namespace
+{
+constexpr int MAX_VISUAL_DELAY_FRAMES = 12;
+
+int InputDisplayVisualDelay()
+{
+  return std::clamp(Config::Get(Config::MAIN_MOVIE_INPUT_DISPLAY_VISUAL_DELAY), 0,
+                    MAX_VISUAL_DELAY_FRAMES);
+}
+}  // namespace
 
 static QColor ArgbToColor(u32 argb)
 {
@@ -58,7 +72,9 @@ static bool OverlayActive(const GCSkinOverlay& ov, const GCPadStatus& pad, bool 
   return PadButton(pad, ov.when);
 }
 
-InputDisplayDumper::InputDisplayDumper(const GCSkin& skin, int port) : m_skin(skin), m_port(port)
+InputDisplayDumper::InputDisplayDumper(const GCSkin& skin, int port,
+                                       bool force_black_background)
+    : m_skin(skin), m_port(port), m_force_black_background(force_black_background)
 {
   m_listener = API::GetEventHub().ListenEvent<API::Events::FrameAdvance>(
       [this](const API::Events::FrameAdvance&) { OnFrameAdvance(); });
@@ -73,6 +89,7 @@ InputDisplayDumper::~InputDisplayDumper()
 void InputDisplayDumper::Start()
 {
   m_active = true;
+  m_status_history.clear();
 }
 
 void InputDisplayDumper::Stop()
@@ -120,7 +137,7 @@ QImage InputDisplayDumper::RenderSkin(const GCPadStatus& pad, bool connected)
 {
   const int w = m_skin.Width(), h = m_skin.Height();
   QImage image(w, h, QImage::Format_RGBA8888);
-  image.fill(Qt::transparent);
+  image.fill(m_force_black_background ? Qt::black : Qt::transparent);
 
   QPainter p(&image);
   p.setRenderHint(QPainter::Antialiasing, true);
@@ -142,7 +159,8 @@ QImage InputDisplayDumper::RenderSkin(const GCPadStatus& pad, bool connected)
       p.drawImage(QRectF(x, y, fw, fh), img, QRectF(img.rect()));
   };
 
-  p.fillRect(image.rect(), ArgbToColor(m_skin.background));
+  if (!m_force_black_background)
+    p.fillRect(image.rect(), ArgbToColor(m_skin.background));
 
   for (const GCSkinStick& st : m_skin.sticks)
   {
@@ -234,6 +252,17 @@ QImage InputDisplayDumper::RenderSkin(const GCPadStatus& pad, bool connected)
   return image;
 }
 
+std::optional<GCPadStatus> InputDisplayDumper::GetDelayedStatus(std::optional<GCPadStatus> status)
+{
+  m_status_history.push_back(status);
+  while (m_status_history.size() > static_cast<size_t>(MAX_VISUAL_DELAY_FRAMES + 1))
+    m_status_history.pop_front();
+
+  const int delay = InputDisplayVisualDelay();
+  const size_t available_delay = std::min<size_t>(delay, m_status_history.size() - 1);
+  return m_status_history[m_status_history.size() - 1 - available_delay];
+}
+
 void InputDisplayDumper::OnFrameAdvance()
 {
 #if defined(HAVE_FFMPEG)
@@ -241,7 +270,7 @@ void InputDisplayDumper::OnFrameAdvance()
     return;
 
   auto& movie = Core::System::GetInstance().GetMovie();
-  const auto status = movie.GetDisplayedPadStatus(m_port);
+  const auto status = GetDelayedStatus(movie.GetDisplayedPadStatus(m_port));
   const GCPadStatus pad = status.value_or(GCPadStatus{});
   const bool connected = status.has_value() &&
                          (m_skin.gba_mode ? !(pad.button & PAD_BUTTON_Y) : pad.isConnected);

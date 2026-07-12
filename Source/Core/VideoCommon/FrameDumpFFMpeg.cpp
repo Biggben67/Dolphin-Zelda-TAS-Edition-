@@ -9,7 +9,10 @@
 #endif
 
 #include <array>
+#include <initializer_list>
 #include <string>
+#include <string_view>
+#include <thread>
 
 #include <fmt/chrono.h>
 #include <fmt/format.h>
@@ -170,6 +173,17 @@ std::string AVErrorString(int error)
   return fmt::format("{:8x} {}", (u32)error, &msg[0]);
 }
 
+const AVCodec* FindFirstAvailableEncoder(std::initializer_list<const char*> names)
+{
+  for (const char* name : names)
+  {
+    if (const AVCodec* codec = avcodec_find_encoder_by_name(name))
+      return codec;
+  }
+
+  return nullptr;
+}
+
 }  // namespace
 
 bool FFMpegFrameDump::Start(int w, int h, u64 start_ticks, const std::string& name_prefix)
@@ -230,8 +244,9 @@ bool FFMpegFrameDump::CreateVideoFile()
     return false;
   }
 
-  const std::string codec_name =
-      Config::Get(Config::GFX_USE_LOSSLESS) ? "utvideo" : Config::Get(Config::GFX_DUMP_CODEC);
+  const bool use_lossless = Config::Get(Config::GFX_USE_LOSSLESS);
+  const bool composite_dump = m_name_prefix == "Composite";
+  const std::string codec_name = use_lossless ? "utvideo" : Config::Get(Config::GFX_DUMP_CODEC);
 
   AVCodecID codec_id = output_format->video_codec;
 
@@ -255,6 +270,19 @@ bool FFMpegFrameDump::CreateVideoFile()
   if (!codec)
     codec = avcodec_find_encoder(codec_id);
 
+  if (!codec && codec_id == AV_CODEC_ID_HEVC)
+    codec = FindFirstAvailableEncoder({"libx265", "hevc_mf", "hevc_nvenc", "hevc_qsv",
+                                       "hevc_amf", "hevc_vaapi", "hevc_videotoolbox"});
+  if (!codec && codec_id == AV_CODEC_ID_H264)
+    codec = FindFirstAvailableEncoder({"libx264", "h264_mf", "h264_nvenc", "h264_qsv",
+                                       "h264_amf", "h264_vaapi", "h264_videotoolbox"});
+  if (!codec)
+  {
+    WARN_LOG_FMT(FRAMEDUMP,
+                 "Requested frame dump codec/encoder is unavailable, falling back to MPEG-4");
+    codec = avcodec_find_encoder(AV_CODEC_ID_MPEG4);
+  }
+
   m_context->codec = avcodec_alloc_context3(codec);
   if (!codec || !m_context->codec)
   {
@@ -264,8 +292,8 @@ bool FFMpegFrameDump::CreateVideoFile()
 
   m_max_denominator = std::numeric_limits<s64>::max();
 
-  // Force XVID FourCC for better compatibility when using H.263
-  if (codec->id == AV_CODEC_ID_MPEG4)
+  // Force XVID FourCC for better AVI compatibility, but leave MP4 free to use its native tag.
+  if (codec->id == AV_CODEC_ID_MPEG4 && std::string_view(output_format->name) == "avi")
   {
     m_context->codec->codec_tag = MKTAG('X', 'V', 'I', 'D');
     m_max_denominator = std::numeric_limits<unsigned short>::max();
@@ -281,8 +309,21 @@ bool FFMpegFrameDump::CreateVideoFile()
   m_context->codec->width = m_context->width;
   m_context->codec->height = m_context->height;
   m_context->codec->time_base = time_base;
-  m_context->codec->gop_size = 1;
-  m_context->codec->level = 1;
+  m_context->codec->gop_size = composite_dump && !use_lossless ? 60 : 1;
+  m_context->codec->max_b_frames = 0;
+  m_context->codec->level = composite_dump ? FF_LEVEL_UNKNOWN : 1;
+
+  if (const unsigned int thread_count = std::thread::hardware_concurrency(); thread_count > 1)
+    m_context->codec->thread_count = static_cast<int>(thread_count);
+
+  if (composite_dump && codec->id == AV_CODEC_ID_MPEG4 && !use_lossless)
+  {
+    // Composite dumps are full-canvas 60 Hz videos. Encoding every frame as an I-frame makes
+    // MPEG-4 look heavily starved even at high nominal bitrates, so keep it editor-friendly
+    // without B-frames but allow P-frames and a tighter quantizer range.
+    m_context->codec->qmin = 1;
+    m_context->codec->qmax = 10;
+  }
 
   AVPixelFormat pix_fmt = AV_PIX_FMT_NONE;
 
@@ -362,6 +403,11 @@ bool FFMpegFrameDump::IsFirstFrameInCurrentFile() const
   return m_context->last_pts == AV_NOPTS_VALUE;
 }
 
+bool FFMpegFrameDump::IsFrameDumpManagerDump() const
+{
+  return m_name_prefix == "Composite" || m_name_prefix.starts_with("FrameDumpManager/");
+}
+
 void FFMpegFrameDump::AddFrame(const FrameData& frame)
 {
   // Are we even dumping?
@@ -374,12 +420,15 @@ void FFMpegFrameDump::AddFrame(const FrameData& frame)
   if (!IsStarted())
     return;
 
-  // Calculate presentation timestamp from ticks since start.
-  const s64 pts = av_rescale_q(
-      frame.state.ticks - m_context->start_ticks,
-      // TODO: GetTicksPerSecond is not safe from GPU thread.
-      AVRational{1, int(Core::System::GetInstance().GetSystemTimers().GetTicksPerSecond())},
-      m_context->codec->time_base);
+  const s64 pts = IsFrameDumpManagerDump() ?
+                      frame.state.frame_number :
+                      av_rescale_q(
+                          frame.state.ticks - m_context->start_ticks,
+                          // TODO: GetTicksPerSecond is not safe from GPU thread.
+                          AVRational{1, int(Core::System::GetInstance()
+                                                .GetSystemTimers()
+                                                .GetTicksPerSecond())},
+                          m_context->codec->time_base);
 
   if (!IsFirstFrameInCurrentFile())
   {
@@ -512,6 +561,12 @@ void FFMpegFrameDump::DoState(PointerWrap& p)
 
 void FFMpegFrameDump::CheckForConfigChange(const FrameData& frame)
 {
+  // The frame dump manager produces fixed editor-style video tracks. Its sources can be paced by
+  // different windows and should not be split just because the underlying game state, refresh
+  // metadata, or source widget size changes during a long dump.
+  if (IsFrameDumpManagerDump())
+    return;
+
   bool restart_dump = false;
 
   // We check here to see if the requested width and height have changed since the last frame which

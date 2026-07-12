@@ -17,12 +17,10 @@ public:
   ConfigText(const Config::Info<std::string>& setting, Config::Layer* layer);
 
   void SetTextAndUpdate(const QString& text);
+  void Update();
 
 protected:
   void OnConfigChanged() override;
 
   const Config::Info<std::string> m_setting;
-
-private:
-  void Update();
 };

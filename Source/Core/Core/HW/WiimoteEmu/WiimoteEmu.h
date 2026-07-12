@@ -124,6 +124,10 @@ public:
   static constexpr const char* GYROSCOPE_GROUP = "IMUGyroscope";
   static constexpr const char* IR_GROUP = "IR";
   static constexpr const char* IR_INSTANT_POINT_OVERRIDE = "Instant Point";
+  static constexpr const char* IR_ROTATION_OVERRIDE = "Rotation";
+  static constexpr const char* IR_DISTANCE_OVERRIDE = "Distance";
+  static constexpr const char* IR_RAW_X_OVERRIDE = "Raw X";
+  static constexpr const char* IR_RAW_Y_OVERRIDE = "Raw Y";
   static constexpr const char* IR_PASSTHROUGH_GROUP = "IRPassthrough";
 
   static constexpr const char* A_BUTTON = "A";

@@ -155,6 +155,7 @@ void SaveScreenShot(std::string_view name);
 void DisplayMessage(std::string message, int time_in_ms);
 
 void FrameUpdateOnCPUThread();
+void OnFrameStart(Core::System& system);
 void OnFrameEnd(Core::System& system);
 
 // Run a function on the CPU thread, asynchronously.

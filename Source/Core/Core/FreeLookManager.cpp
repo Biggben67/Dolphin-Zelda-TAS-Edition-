@@ -12,6 +12,8 @@
 
 #include "Core/Config/FreeLookSettings.h"
 #include "Core/Core.h"
+#include "Core/Movie.h"
+#include "Core/System.h"
 
 #include "InputCommon/ControlReference/ControlReference.h"
 #include "InputCommon/ControllerEmu/ControlGroup/Buttons.h"
@@ -76,6 +78,15 @@ enum GyroButtons
   YawRight,
 };
 }
+
+namespace KeyframeButtons
+{
+enum KeyframeButtons
+{
+  Add,
+  TogglePlayback,
+};
+}
 }  // namespace
 
 FreeLookController::FreeLookController(const unsigned int index) : m_index(index)
@@ -110,6 +121,10 @@ FreeLookController::FreeLookController(const unsigned int index) : m_index(index
 
   groups.emplace_back(m_rotation_gyro = new ControllerEmu::IMUGyroscope(
                           _trans("Incremental Rotation"), _trans("Incremental Rotation")));
+
+  groups.emplace_back(m_keyframe_buttons = new ControllerEmu::Buttons(_trans("Keyframe Path")));
+  m_keyframe_buttons->AddInput(Translatability::Translate, _trans("Add Keyframe"));
+  m_keyframe_buttons->AddInput(Translatability::Translate, _trans("Toggle Playback"));
 }
 
 std::string FreeLookController::GetName() const
@@ -152,6 +167,10 @@ void FreeLookController::LoadDefaults(const ControllerInterface& ciface)
                                       hotkey_string({"Shift", "`Axis Z+`"}));
   m_fov_buttons->SetControlExpression(FieldOfViewButtons::DecreaseY,
                                       hotkey_string({"Shift", "`Axis Z-`"}));
+
+  m_keyframe_buttons->SetControlExpression(KeyframeButtons::Add, hotkey_string({"Shift", "Z"}));
+  m_keyframe_buttons->SetControlExpression(KeyframeButtons::TogglePlayback,
+                                           hotkey_string({"Shift", "V"}));
 
   // Left Click
 #if defined HAVE_X11 && HAVE_X11
@@ -218,6 +237,8 @@ ControllerEmu::ControlGroup* FreeLookController::GetGroup(FreeLookGroup group) c
     return m_other_buttons;
   case FreeLookGroup::Rotation:
     return m_rotation_gyro;
+  case FreeLookGroup::Keyframe:
+    return m_keyframe_buttons;
   default:
     return nullptr;
   }
@@ -238,10 +259,8 @@ void FreeLookController::Update()
 void FreeLookController::UpdateInput(CameraControllerInput* camera_controller)
 {
   const auto lock = GetStateLock();
-  // Preserve the old controller gate state
   const auto old_gate = ControlReference::GetInputGate();
   Common::ScopeGuard gate_guard{[old_gate] { ControlReference::SetInputGate(old_gate); }};
-  // Switch to the free look focus gate
   Core::UpdateInputGate(!Config::Get(Config::FREE_LOOK_BACKGROUND_INPUT));
 
   float dt = 1.0;
@@ -254,12 +273,56 @@ void FreeLookController::UpdateInput(CameraControllerInput* camera_controller)
   }
   m_last_free_look_rotate_time = std::chrono::steady_clock::now();
 
+  const bool add_down = m_keyframe_buttons->controls[KeyframeButtons::Add]->GetState<bool>();
+  const bool toggle_playback_down =
+      m_keyframe_buttons->controls[KeyframeButtons::TogglePlayback]->GetState<bool>();
+
+  const bool add_pressed = add_down && !m_last_keyframe_button_states[KeyframeButtons::Add];
+  const bool toggle_playback_pressed =
+      toggle_playback_down && !m_last_keyframe_button_states[KeyframeButtons::TogglePlayback];
+
+  m_last_keyframe_button_states[KeyframeButtons::Add] = add_down;
+  m_last_keyframe_button_states[KeyframeButtons::TogglePlayback] = toggle_playback_down;
+
+  if ((add_pressed || toggle_playback_pressed) && !camera_controller->SupportsKeyframeAnimation())
+  {
+    Core::DisplayMessage("Keyframe path is only available in Six Axis or First Person free look mode.",
+                         3500);
+  }
+  else if (camera_controller->SupportsKeyframeAnimation())
+  {
+    if (add_pressed)
+    {
+      camera_controller->AddKeyframe();
+      camera_controller->SaveKeyframesToDraftFile();
+      Core::DisplayMessage(
+          fmt::format("Free Look keyframes: {}", camera_controller->GetKeyframeCount()),
+          2000);
+    }
+
+    if (toggle_playback_pressed)
+    {
+      camera_controller->ToggleKeyframePlayback();
+      Core::DisplayMessage(
+          fmt::format("Free Look path playback: {}",
+                      camera_controller->IsKeyframePlaybackActive() ? "On" : "Off"),
+          2000);
+    }
+  }
+
+  Core::System& system = Core::System::GetInstance();
+  const bool frame_synced_focus_path =
+      Config::Get(Config::FL1_FOCUS_TARGET_ENABLED) &&
+      Config::Get(Config::FL1_KEYFRAME_SYNC_TO_TAS) && system.GetMovie().IsPlayingInput();
+  if (!frame_synced_focus_path)
+    camera_controller->AdvanceKeyframePlayback(dt);
+
+  if (camera_controller->IsKeyframePlaybackActive())
+    return;
+
   const auto gyro_motion_rad_velocity =
       m_rotation_gyro->GetState() ? *m_rotation_gyro->GetState() : Common::Vec3{};
 
-  // Due to gyroscope implementation we need to swap the yaw and roll values
-  // and because of the different axis used for Wii and the PS3 motion directions,
-  // we need to invert the yaw and roll as well
   const Common::Vec3 gyro_motion_rad_velocity_converted{
       gyro_motion_rad_velocity.x, gyro_motion_rad_velocity.z * -1, gyro_motion_rad_velocity.y * -1};
   const auto gyro_motion_quat =
@@ -307,6 +370,7 @@ void FreeLookController::UpdateInput(CameraControllerInput* camera_controller)
 
   if (m_other_buttons->controls[OtherButtons::ResetView]->GetState<bool>())
     camera_controller->Reset();
+
 }
 
 namespace FreeLook

@@ -72,6 +72,7 @@
     <ClCompile Include="Config\ControllerInterface\ServerStringValidator.cpp" />
     <ClCompile Include="Config\ControllersPane.cpp" />
     <ClCompile Include="Config\FilesystemWidget.cpp" />
+    <ClCompile Include="Config\FreeLookKeyframeEditor.cpp" />
     <ClCompile Include="Config\FreeLookWidget.cpp" />
     <ClCompile Include="Config\FreeLookWindow.cpp" />
     <ClCompile Include="Config\GameConfigEdit.cpp" />
@@ -93,6 +94,7 @@
     <ClCompile Include="Config\LogConfigWidget.cpp" />
     <ClCompile Include="Config\LogWidget.cpp" />
     <ClCompile Include="Config\Mapping\FreeLookGeneral.cpp" />
+    <ClCompile Include="Config\Mapping\FreeLookKeyframes.cpp" />
     <ClCompile Include="Config\Mapping\FreeLookRotation.cpp" />
     <ClCompile Include="Config\Mapping\GBAPadEmu.cpp" />
     <ClCompile Include="Config\Mapping\GCKeyboardEmu.cpp" />
@@ -311,6 +313,7 @@
     <QtMoc Include="Config\ControllerInterface\ServerStringValidator.h" />
     <QtMoc Include="Config\ControllersPane.h" />
     <QtMoc Include="Config\FilesystemWidget.h" />
+    <QtMoc Include="Config\FreeLookKeyframeEditor.h" />
     <QtMoc Include="Config\FreeLookWidget.h" />
     <QtMoc Include="Config\FreeLookWindow.h" />
     <QtMoc Include="Config\GamecubeControllersWidget.h" />
@@ -331,6 +334,7 @@
     <QtMoc Include="Config\LogConfigWidget.h" />
     <QtMoc Include="Config\LogWidget.h" />
     <QtMoc Include="Config\Mapping\FreeLookGeneral.h" />
+    <QtMoc Include="Config\Mapping\FreeLookKeyframes.h" />
     <QtMoc Include="Config\Mapping\FreeLookRotation.h" />
     <QtMoc Include="Config\Mapping\GBAPadEmu.h" />
     <QtMoc Include="Config\Mapping\GCKeyboardEmu.h" />

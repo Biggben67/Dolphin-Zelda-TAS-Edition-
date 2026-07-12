@@ -6,6 +6,9 @@
 #include "Core/HW/GBACore.h"
 
 #include <algorithm>
+#include <array>
+#include <map>
+#include <mutex>
 
 #define PYCPARSE  // Remove static functions from the header
 #include <mgba/core/interface.h>
@@ -50,6 +53,34 @@ namespace
 {
 mLogger s_stub_logger = {
     [](mLogger*, int category, mLogLevel level, const char* format, va_list args) {}, nullptr};
+
+struct LatestVideoFrame
+{
+  std::vector<u32> pixels;
+  u32 width = 0;
+  u32 height = 0;
+};
+
+std::array<LatestVideoFrame, 4> s_latest_video_frames;
+std::mutex s_latest_video_frames_mutex;
+
+std::mutex s_video_frame_callbacks_mutex;
+std::map<u64, Core::VideoFrameCallback> s_video_frame_callbacks;
+u64 s_next_video_frame_callback_id = 1;
+
+void NotifyVideoFrameCallbacks(int device_number, u64 ticks)
+{
+  std::vector<Core::VideoFrameCallback> callbacks;
+  {
+    std::lock_guard lock(s_video_frame_callbacks_mutex);
+    callbacks.reserve(s_video_frame_callbacks.size());
+    for (const auto& [id, callback] : s_video_frame_callbacks)
+      callbacks.push_back(callback);
+  }
+
+  for (const Core::VideoFrameCallback& callback : callbacks)
+    callback(device_number, ticks);
+}
 }  // namespace
 
 constexpr size_t AUDIO_BUFFER_SIZE = 512;
@@ -448,11 +479,60 @@ void Core::AddCallbacks()
   };
   callbacks.videoFrameEnded = [](void* context) {
     auto core = static_cast<Core*>(context);
+    u32 width = 0;
+    u32 height = 0;
+    core->m_core->currentVideoSize(core->m_core, &width, &height);
+    if (width != 0 && height != 0 &&
+        core->m_video_buffer.size() == static_cast<size_t>(width) * height &&
+        core->m_device_number >= 0 &&
+        core->m_device_number < static_cast<int>(s_latest_video_frames.size()))
+    {
+      std::lock_guard lock(s_latest_video_frames_mutex);
+      auto& frame = s_latest_video_frames[core->m_device_number];
+      frame.pixels = core->m_video_buffer;
+      frame.width = width;
+      frame.height = height;
+    }
+    NotifyVideoFrameCallbacks(core->m_device_number, core->m_last_gc_ticks);
     if (auto host = core->m_host.lock())
       host->FrameEnded(core->m_video_buffer);
     core->DumpFrame();
   };
   m_core->addCoreCallbacks(m_core, &callbacks);
+}
+
+bool Core::GetLatestVideoFrame(int device_number, std::vector<u32>* video_buffer, u32* width,
+                               u32* height)
+{
+  if (!video_buffer || !width || !height || device_number < 0 ||
+      device_number >= static_cast<int>(s_latest_video_frames.size()))
+  {
+    return false;
+  }
+
+  std::lock_guard lock(s_latest_video_frames_mutex);
+  const auto& frame = s_latest_video_frames[device_number];
+  if (frame.pixels.empty() || frame.width == 0 || frame.height == 0)
+    return false;
+
+  *video_buffer = frame.pixels;
+  *width = frame.width;
+  *height = frame.height;
+  return true;
+}
+
+u64 Core::AddVideoFrameCallback(VideoFrameCallback callback)
+{
+  std::lock_guard lock(s_video_frame_callbacks_mutex);
+  const u64 callback_id = s_next_video_frame_callback_id++;
+  s_video_frame_callbacks.emplace(callback_id, std::move(callback));
+  return callback_id;
+}
+
+void Core::RemoveVideoFrameCallback(u64 callback_id)
+{
+  std::lock_guard lock(s_video_frame_callbacks_mutex);
+  s_video_frame_callbacks.erase(callback_id);
 }
 
 void Core::DumpFrame()

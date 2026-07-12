@@ -50,6 +50,7 @@ public:
 
 private:
   bool IsFirstFrameInCurrentFile() const;
+  bool IsFrameDumpManagerDump() const;
   bool PrepareEncoding(int w, int h, u64 start_ticks, u32 savestate_index);
   bool CreateVideoFile();
   void CloseVideoFile();

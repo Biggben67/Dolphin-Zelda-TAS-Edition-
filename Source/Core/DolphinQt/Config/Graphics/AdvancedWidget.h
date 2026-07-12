@@ -8,7 +8,9 @@
 class ConfigBool;
 class ConfigChoice;
 class ConfigInteger;
+class ConfigText;
 class GraphicsPane;
+class QComboBox;
 
 namespace Config
 {
@@ -27,6 +29,8 @@ private:
   void AddDescriptions();
   void OnBackendChanged();
   void OnEmulationStateChanged(bool running);
+  void ApplyDumpCodecPreset(int index);
+  void UpdateDumpCodecPresetControls();
 
   // Debugging
   ConfigBool* m_enable_wireframe;
@@ -49,6 +53,11 @@ private:
 
   // Frame dumping
   ConfigBool* m_dump_use_lossless;
+  QComboBox* m_dump_codec_preset;
+  ConfigText* m_dump_format;
+  ConfigText* m_dump_codec;
+  ConfigText* m_dump_encoder;
+  ConfigText* m_dump_pixel_format;
   ConfigChoice* m_frame_dumps_resolution_type;
   ConfigInteger* m_dump_bitrate;
   ConfigInteger* m_png_compression_level;

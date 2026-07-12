@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <array>
 #include <chrono>
 #include <optional>
 
@@ -25,6 +26,7 @@ enum class FreeLookGroup
   FieldOfView,
   Other,
   Rotation,
+  Keyframe,
 };
 
 namespace FreeLook
@@ -59,7 +61,9 @@ private:
   ControllerEmu::Buttons* m_fov_buttons;
   ControllerEmu::Buttons* m_other_buttons;
   ControllerEmu::IMUGyroscope* m_rotation_gyro;
+  ControllerEmu::Buttons* m_keyframe_buttons;
 
   const unsigned int m_index;
   std::optional<std::chrono::steady_clock::time_point> m_last_free_look_rotate_time;
+  std::array<bool, 2> m_last_keyframe_button_states{};
 };

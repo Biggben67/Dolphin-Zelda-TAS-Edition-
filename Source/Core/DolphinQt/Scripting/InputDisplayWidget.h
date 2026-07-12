@@ -4,6 +4,9 @@
 
 #pragma once
 
+#include <deque>
+#include <optional>
+
 #include <QHash>
 #include <QPixmap>
 #include <QTimer>
@@ -39,6 +42,7 @@ private:
   const QPixmap& LoadPixmap(const QString& path);
   const QPixmap& TintedPixmap(const QString& path, u32 argb);
   void DrawSkin(QPainter& painter);
+  void ClearVisualDelayHistory();
   void Poll();
 
   const GCSkin& m_skin;
@@ -46,7 +50,10 @@ private:
   QTimer m_timer;
   QHash<QString, QPixmap> m_pixmaps;
   QHash<QString, QPixmap> m_tinted;
+  std::deque<std::optional<GCPadStatus>> m_status_history;
   GCPadStatus m_pad;
+  u64 m_last_poll_count = 0;
+  bool m_has_last_poll_count = false;
   bool m_connected = true;
   bool m_dumping = false;
   bool m_remove_background = false;

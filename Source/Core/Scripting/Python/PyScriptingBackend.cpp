@@ -227,7 +227,13 @@ static void Init(std::filesystem::path script_filepath)
     return;
   }
 
-  PyCompilerFlags flags = {PyCF_ALLOW_TOP_LEVEL_AWAIT};
+  PyCompilerFlags flags = {};
+  flags.cf_flags = PyCF_ALLOW_TOP_LEVEL_AWAIT;
+#if PY_VERSION_HEX >= 0x03080000
+  // Python 3.8+ uses cf_feature_version to select the grammar minor version.
+  // Leaving it as 0 makes valid modern syntax like variable annotations fail.
+  flags.cf_feature_version = PY_MINOR_VERSION;
+#endif
   Py::Object execution_result = Py::Wrap(PyRun_FileExFlags(
       script_file, script_filepath_str.c_str(), Py_file_input, globals.Lend(), globals.Lend(), true,
       &flags));

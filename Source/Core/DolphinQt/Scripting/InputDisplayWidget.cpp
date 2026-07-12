@@ -4,15 +4,30 @@
 
 #include "DolphinQt/Scripting/InputDisplayWidget.h"
 
+#include <algorithm>
+
 #include <QAction>
+#include <QActionGroup>
 #include <QCloseEvent>
 #include <QContextMenuEvent>
 #include <QMenu>
 #include <QPainter>
 
+#include "Core/Config/MainSettings.h"
 #include "Core/Movie.h"
 #include "Core/System.h"
 #include "InputCommon/GCPadStatus.h"
+
+namespace
+{
+constexpr int MAX_VISUAL_DELAY_FRAMES = 12;
+
+int InputDisplayVisualDelay()
+{
+  return std::clamp(Config::Get(Config::MAIN_MOVIE_INPUT_DISPLAY_VISUAL_DELAY), 0,
+                    MAX_VISUAL_DELAY_FRAMES);
+}
+}  // namespace
 
 static QColor ArgbToColor(u32 argb)
 {
@@ -89,11 +104,31 @@ void InputDisplayWidget::contextMenuEvent(QContextMenuEvent* event)
   remove_background_action->setCheckable(true);
   remove_background_action->setChecked(m_remove_background);
 
+  auto* delay_menu = menu.addMenu(tr("Visual Delay"));
+  auto* delay_group = new QActionGroup(delay_menu);
+  delay_group->setExclusive(true);
+  const int current_delay = InputDisplayVisualDelay();
+  for (int delay = 0; delay <= 6; ++delay)
+  {
+    const QString suffix = delay == 1 ? QString() : QStringLiteral("s");
+    auto* action = delay_menu->addAction(tr("%1 frame%2").arg(delay).arg(suffix));
+    action->setCheckable(true);
+    action->setChecked(delay == current_delay);
+    action->setData(delay);
+    delay_group->addAction(action);
+  }
+
   const QAction* selected = menu.exec(event->globalPos());
   if (selected == dump_action)
     emit dumpControllerInputsChanged(m_port, !m_dumping);
   else if (selected == remove_background_action)
     SetBackgroundRemoved(!m_remove_background);
+  else if (selected && selected->parent() == delay_menu)
+  {
+    Config::SetBaseOrCurrent(Config::MAIN_MOVIE_INPUT_DISPLAY_VISUAL_DELAY,
+                             selected->data().toInt());
+    ClearVisualDelayHistory();
+  }
 }
 
 const QPixmap& InputDisplayWidget::LoadPixmap(const QString& path)
@@ -126,10 +161,28 @@ const QPixmap& InputDisplayWidget::TintedPixmap(const QString& path, u32 argb)
 
 void InputDisplayWidget::RefreshState()
 {
-  const auto status = Core::System::GetInstance().GetMovie().GetDisplayedPadStatus(m_port);
-  if (status.has_value())
+  auto& movie = Core::System::GetInstance().GetMovie();
+  const u64 poll_count = movie.GetPollCount();
+  const auto status = movie.GetDisplayedPadStatus(m_port);
+  if (!m_has_last_poll_count || poll_count != m_last_poll_count || m_status_history.empty())
   {
-    m_pad = *status;
+    m_status_history.push_back(status);
+    while (m_status_history.size() > static_cast<size_t>(MAX_VISUAL_DELAY_FRAMES + 1))
+      m_status_history.pop_front();
+    m_last_poll_count = poll_count;
+    m_has_last_poll_count = true;
+  }
+
+  const int delay = InputDisplayVisualDelay();
+  const size_t available_delay =
+      m_status_history.empty() ? 0 : std::min<size_t>(delay, m_status_history.size() - 1);
+  const std::optional<GCPadStatus> delayed_status =
+      m_status_history.empty() ? status : m_status_history[m_status_history.size() - 1 -
+                                                           available_delay];
+
+  if (delayed_status.has_value())
+  {
+    m_pad = *delayed_status;
     m_connected = m_skin.gba_mode ? !(m_pad.button & PAD_BUTTON_Y) : m_pad.isConnected;
   }
   // If nullopt (no game running yet), keep the previous pad state rather than
@@ -154,6 +207,12 @@ void InputDisplayWidget::SetBackgroundRemoved(bool removed)
 void InputDisplayWidget::Poll()
 {
   RefreshState();
+}
+
+void InputDisplayWidget::ClearVisualDelayHistory()
+{
+  m_status_history.clear();
+  m_has_last_poll_count = false;
 }
 
 void InputDisplayWidget::paintEvent(QPaintEvent*)

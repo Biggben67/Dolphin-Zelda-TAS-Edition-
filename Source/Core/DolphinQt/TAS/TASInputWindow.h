@@ -98,8 +98,12 @@ protected:
   void SetDefaultContentLayoutBuilder(std::function<QLayout*()> builder);
   void MakeSectionResizable(const std::string& key, QWidget* widget);
   void RegisterVisibilitySection(const QString& label, const std::string& key, QWidget* widget);
+  void RegisterVisibilitySection(const QString& label, const std::string& key, QWidget* widget,
+                                 bool default_visible);
   void RegisterVisibilitySection(const QString& label, const std::string& key,
                                  std::vector<QWidget*> widgets);
+  void RegisterVisibilitySection(const QString& label, const std::string& key,
+                                 std::vector<QWidget*> widgets, bool default_visible);
   void SetAlwaysOnTopConfigKey(std::string key);
   void SetLayoutConfigKey(std::string key);
   void FinalizeVisibilitySections();
@@ -125,6 +129,7 @@ private:
     QString label;
     std::string key;
     std::vector<QWidget*> widgets;
+    bool default_visible = true;
   };
 
   struct ResizableSection
@@ -170,8 +175,9 @@ private:
   void ApplyAlwaysOnTopWindowFlags(bool enabled);
   std::string GetAlwaysOnTopConfigKey() const;
   void SetVisibilitySectionVisible(std::size_t section_index, bool visible);
-  bool LoadVisibilitySectionVisible(const std::string& key) const;
-  void SaveVisibilitySectionVisible(const std::string& key, bool visible) const;
+  bool LoadVisibilitySectionVisible(const VisibilitySection& section) const;
+  bool LoadVisibilitySectionVisible(const std::string& key, bool default_visible = true) const;
+  void SaveVisibilitySectionVisible(const VisibilitySection& section, bool visible) const;
   std::optional<ControlState> GetButton(TASCheckBox* checkbox, ControlState controller_state);
   std::optional<ControlState> GetSpinBox(TASSpinBox* spin, int zero, int min, int max,
                                          ControlState controller_state);
