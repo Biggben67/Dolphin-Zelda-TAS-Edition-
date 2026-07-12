@@ -1093,17 +1093,29 @@ std::string TASInputWindow::LoadLayoutState() const
 void TASInputWindow::RegisterVisibilitySection(const QString& label, const std::string& key,
                                                QWidget* widget)
 {
-  RegisterVisibilitySection(label, key, std::vector<QWidget*>{widget});
+  RegisterVisibilitySection(label, key, widget, true);
+}
+
+void TASInputWindow::RegisterVisibilitySection(const QString& label, const std::string& key,
+                                               QWidget* widget, bool default_visible)
+{
+  RegisterVisibilitySection(label, key, std::vector<QWidget*>{widget}, default_visible);
 }
 
 void TASInputWindow::RegisterVisibilitySection(const QString& label, const std::string& key,
                                                std::vector<QWidget*> widgets)
 {
+  RegisterVisibilitySection(label, key, std::move(widgets), true);
+}
+
+void TASInputWindow::RegisterVisibilitySection(const QString& label, const std::string& key,
+                                               std::vector<QWidget*> widgets, bool default_visible)
+{
   widgets.erase(std::remove(widgets.begin(), widgets.end(), nullptr), widgets.end());
   if (widgets.empty())
     return;
 
-  m_visibility_sections.push_back({label, key, std::move(widgets)});
+  m_visibility_sections.push_back({label, key, std::move(widgets), default_visible});
 }
 
 void TASInputWindow::SetAlwaysOnTopConfigKey(std::string key)
@@ -1142,7 +1154,7 @@ void TASInputWindow::ApplyVisibilitySettings()
 {
   for (const auto& section : m_visibility_sections)
   {
-    const bool visible = LoadVisibilitySectionVisible(section.key);
+    const bool visible = LoadVisibilitySectionVisible(section);
     for (QWidget* widget : section.widgets)
       widget->setVisible(visible);
   }
@@ -1150,6 +1162,12 @@ void TASInputWindow::ApplyVisibilitySettings()
 
 bool TASInputWindow::IsVisibilitySectionUserVisible(const std::string& key) const
 {
+  const auto section_iter =
+      std::ranges::find_if(m_visibility_sections,
+                           [&key](const VisibilitySection& section) { return section.key == key; });
+  if (section_iter != m_visibility_sections.end())
+    return LoadVisibilitySectionVisible(*section_iter);
+
   return LoadVisibilitySectionVisible(key);
 }
 
@@ -1271,7 +1289,7 @@ void TASInputWindow::ShowOptionsMenu(const QPoint& global_pos)
 
     auto* action = menu.addAction(section.label);
     action->setCheckable(true);
-    action->setChecked(LoadVisibilitySectionVisible(section.key));
+    action->setChecked(LoadVisibilitySectionVisible(section));
     connect(action, &QAction::toggled, this,
             [this, i](bool value) { SetVisibilitySectionVisible(i, value); });
   }
@@ -1354,7 +1372,7 @@ void TASInputWindow::SetVisibilitySectionVisible(std::size_t section_index, bool
     return;
 
   auto& section = m_visibility_sections[section_index];
-  SaveVisibilitySectionVisible(section.key, visible);
+  SaveVisibilitySectionVisible(section, visible);
   ApplyVisibilitySettings();
   if (layout())
   {
@@ -1367,21 +1385,29 @@ void TASInputWindow::SetVisibilitySectionVisible(std::size_t section_index, bool
   }
 }
 
-bool TASInputWindow::LoadVisibilitySectionVisible(const std::string& key) const
+bool TASInputWindow::LoadVisibilitySectionVisible(const VisibilitySection& section) const
 {
-  bool visible = true;
+  return LoadVisibilitySectionVisible(section.key, section.default_visible);
+}
+
+bool TASInputWindow::LoadVisibilitySectionVisible(const std::string& key,
+                                                  bool default_visible) const
+{
+  bool visible = default_visible;
   Common::IniFile ini;
   ini.Load(GetDolphinIniPath());
   ini.GetIfExists(TAS_WINDOW_VISIBILITY_SECTION, key, &visible);
   return visible;
 }
 
-void TASInputWindow::SaveVisibilitySectionVisible(const std::string& key, bool visible) const
+void TASInputWindow::SaveVisibilitySectionVisible(const VisibilitySection& section,
+                                                  bool visible) const
 {
   Common::IniFile ini;
   const std::string ini_path = GetDolphinIniPath();
   ini.Load(ini_path);
-  ini.GetOrCreateSection(TAS_WINDOW_VISIBILITY_SECTION)->Set(key, visible, true);
+  ini.GetOrCreateSection(TAS_WINDOW_VISIBILITY_SECTION)
+      ->Set(section.key, visible, section.default_visible);
   ini.Save(ini_path);
 }
 

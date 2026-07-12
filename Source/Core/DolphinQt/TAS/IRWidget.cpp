@@ -27,6 +27,11 @@ QSize IRWidget::sizeHint() const
   return QSize(160, 120);
 }
 
+bool IRWidget::IsDragging() const
+{
+  return m_dragging;
+}
+
 void IRWidget::SetX(u16 x)
 {
   m_x = std::min(IR_MAX_X, x);
@@ -71,14 +76,56 @@ void IRWidget::paintEvent(QPaintEvent* event)
 
 void IRWidget::mousePressEvent(QMouseEvent* event)
 {
-  handleMouseEvent(event);
-  m_ignore_movement = event->button() == Qt::RightButton;
+  if (event->button() == Qt::LeftButton)
+  {
+    m_dragging = true;
+    handleMouseEvent(event);
+    event->accept();
+    return;
+  }
+
+  if (event->button() == Qt::RightButton)
+  {
+    m_dragging = false;
+    handleMouseEvent(event);
+    event->accept();
+    return;
+  }
+
+  QWidget::mousePressEvent(event);
+}
+
+void IRWidget::mouseReleaseEvent(QMouseEvent* event)
+{
+  if (event->button() == Qt::LeftButton)
+  {
+    if (m_dragging)
+      handleMouseEvent(event);
+    m_dragging = false;
+    event->accept();
+    return;
+  }
+
+  if (event->button() == Qt::RightButton)
+  {
+    m_dragging = false;
+    event->accept();
+    return;
+  }
+
+  QWidget::mouseReleaseEvent(event);
 }
 
 void IRWidget::mouseMoveEvent(QMouseEvent* event)
 {
-  if (!m_ignore_movement)
+  if (m_dragging && event->buttons().testFlag(Qt::LeftButton))
+  {
     handleMouseEvent(event);
+    event->accept();
+    return;
+  }
+
+  QWidget::mouseMoveEvent(event);
 }
 
 void IRWidget::handleMouseEvent(QMouseEvent* event)

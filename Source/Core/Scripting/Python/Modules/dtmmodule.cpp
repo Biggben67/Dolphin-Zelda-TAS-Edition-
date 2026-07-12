@@ -23,7 +23,9 @@ struct DTMModuleState
 
 PyObject* BoolObject(const bool value)
 {
-  return Py_NewRef(value ? Py_True : Py_False);
+  PyObject* object = value ? Py_True : Py_False;
+  Py_INCREF(object);
+  return object;
 }
 
 template <typename Setter>

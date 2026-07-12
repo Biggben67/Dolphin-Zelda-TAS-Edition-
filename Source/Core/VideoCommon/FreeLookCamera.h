@@ -3,13 +3,21 @@
 
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <optional>
+#include <vector>
 
 #include "Common/Matrix.h"
 #include "Core/Config/FreeLookSettings.h"
 
 class PointerWrap;
+
+namespace Core
+{
+class System;
+}
 
 class CameraController
 {
@@ -37,6 +45,21 @@ public:
 class CameraControllerInput : public CameraController
 {
 public:
+  enum class KeyframeInterpolationMode : int
+  {
+    Linear = 0,
+    CatmullRom = 1,
+    SmoothStep = 2
+  };
+
+  struct KeyframeData
+  {
+    uint64_t frame = 0;
+    Common::Vec3 position = Common::Vec3{};
+    Common::Vec3 rotation = Common::Vec3{};
+    Common::Vec2 fov = Common::Vec2{1.0f, 1.0f};
+  };
+
   Common::Vec2 GetFieldOfViewMultiplier() const final;
 
   void DoState(PointerWrap& p) override;
@@ -56,6 +79,30 @@ public:
 
   virtual void Reset() = 0;
 
+  virtual bool SupportsKeyframeAnimation() const;
+  virtual std::size_t GetKeyframeCount() const;
+  virtual bool IsKeyframePlaybackActive() const;
+  virtual void AddKeyframe();
+  virtual void DeleteLastKeyframe();
+  virtual void ClearKeyframes();
+  virtual void ToggleKeyframePlayback();
+  virtual bool SaveKeyframesToFile();
+  virtual bool LoadKeyframesFromFile();
+  virtual bool SaveKeyframesToDraftFile();
+  virtual bool LoadKeyframesFromDraftFile();
+  virtual void AdvanceKeyframePlayback(float dt);
+  virtual void UpdateFocusTarget();
+  virtual std::vector<KeyframeData> GetKeyframes() const;
+  virtual bool GetKeyframe(std::size_t index, KeyframeData* out_keyframe) const;
+  virtual bool UpdateKeyframe(std::size_t index, const KeyframeData& keyframe);
+  virtual bool DeleteKeyframe(std::size_t index);
+  virtual bool ReplaceKeyframes(std::vector<KeyframeData> keyframes,
+                                KeyframeInterpolationMode interpolation_mode,
+                                bool focus_relative);
+  virtual KeyframeData GetCurrentCameraTransform() const;
+  virtual KeyframeInterpolationMode GetKeyframeInterpolationMode() const;
+  virtual void SetKeyframeInterpolationMode(KeyframeInterpolationMode mode);
+
   void IncreaseFovX(float fov);
   void IncreaseFovY(float fov);
   float GetFovStepSize() const;
@@ -63,6 +110,10 @@ public:
   void ModifySpeed(float multiplier);
   void ResetSpeed();
   float GetSpeed() const;
+
+protected:
+  void MarkDirty();
+  void SetFieldOfViewMultiplier(const Common::Vec2& multiplier);
 
 private:
   static constexpr float MIN_FOV_MULTIPLIER = 0.025f;
@@ -90,6 +141,7 @@ public:
   bool IsActive() const;
 
   CameraController* GetController() const;
+  void UpdateFocusTargetFromMemory(Core::System& system);
 
 private:
   std::unique_ptr<CameraController> m_camera_controller;

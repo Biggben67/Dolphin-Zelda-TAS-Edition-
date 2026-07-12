@@ -42,6 +42,8 @@ public:
   void GameChanged(const HW::GBA::CoreInfo& info);
   void SetVideoBuffer(std::span<const u32> video_buffer);
   const QImage& GetCurrentFrame() const { return m_last_frame; }
+  int GetDeviceNumber() const { return m_core_info.device_number; }
+  static QImage GetLatestFrameForDevice(int device_number);
 
   void SetVolume(int volume);
   void VolumeDown();

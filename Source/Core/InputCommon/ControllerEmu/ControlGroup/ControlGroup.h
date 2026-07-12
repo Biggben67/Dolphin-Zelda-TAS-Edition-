@@ -96,7 +96,8 @@ public:
   template <typename T>
   static T ApplyDeadzone(T input, std::common_type_t<T> deadzone)
   {
-    return std::copysign(std::max(T{0}, std::abs(input) - deadzone) / (T{1} - deadzone), input);
+    const T value = std::max(T{0}, std::abs(input) - deadzone) / (T{1} - deadzone);
+    return std::signbit(input) ? -value : value;
   }
 
   bool HasEnabledSetting() const;

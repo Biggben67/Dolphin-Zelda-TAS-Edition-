@@ -6,7 +6,11 @@
 #include <QGridLayout>
 #include <QGroupBox>
 #include <QLabel>
+#include <QComboBox>
+#include <QSignalBlocker>
 #include <QVBoxLayout>
+
+#include "Common/Config/Config.h"
 
 #include "Core/Config/GraphicsSettings.h"
 #include "Core/Config/SYSCONFSettings.h"
@@ -17,6 +21,7 @@
 #include "DolphinQt/Config/ConfigControls/ConfigBool.h"
 #include "DolphinQt/Config/ConfigControls/ConfigChoice.h"
 #include "DolphinQt/Config/ConfigControls/ConfigInteger.h"
+#include "DolphinQt/Config/ConfigControls/ConfigText.h"
 #include "DolphinQt/Config/GameConfigWidget.h"
 #include "DolphinQt/Config/Graphics/GraphicsPane.h"
 #include "DolphinQt/Settings.h"
@@ -132,26 +137,50 @@ void AdvancedWidget::CreateWidgets()
       new ConfigChoice({tr("Window Resolution"), tr("Aspect Ratio Corrected Internal Resolution"),
                         tr("Raw Internal Resolution")},
                        Config::GFX_FRAME_DUMPS_RESOLUTION_TYPE, m_game_layer);
+  m_frame_dumps_resolution_type->setParent(dump_box);
+  m_frame_dumps_resolution_type->hide();
   m_png_compression_level =
       new ConfigInteger(0, 9, Config::GFX_PNG_COMPRESSION_LEVEL, m_game_layer);
-  dump_layout->addWidget(new QLabel(tr("Resolution Type:")), 0, 0);
-  dump_layout->addWidget(m_frame_dumps_resolution_type, 0, 1);
 
 #if defined(HAVE_FFMPEG)
   m_dump_use_lossless =
       new ConfigBool(tr("Use Lossless Codec (Ut Video)"), Config::GFX_USE_LOSSLESS, m_game_layer);
+  m_dump_codec_preset = new QComboBox;
+  m_dump_codec_preset->addItem(tr("Default"), QStringLiteral("default"));
+  m_dump_codec_preset->addItem(tr("MP4 Compatible"), QStringLiteral("mp4_compatible"));
+  m_dump_codec_preset->addItem(tr("Ut Video Lossless"), QStringLiteral("utvideo"));
+  m_dump_codec_preset->addItem(tr("FFV1 Lossless"), QStringLiteral("ffv1"));
+  m_dump_format = new ConfigText(Config::GFX_DUMP_FORMAT);
+  m_dump_codec = new ConfigText(Config::GFX_DUMP_CODEC);
+  m_dump_encoder = new ConfigText(Config::GFX_DUMP_ENCODER);
+  m_dump_pixel_format = new ConfigText(Config::GFX_DUMP_PIXEL_FORMAT);
+  m_dump_use_lossless->setParent(dump_box);
+  m_dump_format->setParent(dump_box);
+  m_dump_codec->setParent(dump_box);
+  m_dump_encoder->setParent(dump_box);
+  m_dump_pixel_format->setParent(dump_box);
+  m_dump_use_lossless->hide();
+  m_dump_format->hide();
+  m_dump_codec->hide();
+  m_dump_encoder->hide();
+  m_dump_pixel_format->hide();
+  m_dump_format->setPlaceholderText(tr("avi, mp4, matroska"));
+  m_dump_codec->setPlaceholderText(tr("mpeg4, h264, hevc, ffv1"));
+  m_dump_encoder->setPlaceholderText(tr("optional encoder name"));
+  m_dump_pixel_format->setPlaceholderText(tr("yuv420p, bgra"));
 
   m_dump_bitrate = new ConfigInteger(0, 1000000, Config::GFX_BITRATE_KBPS, m_game_layer, 1000);
   m_dump_bitrate->setEnabled(!m_dump_use_lossless->isChecked());
 
-  dump_layout->addWidget(m_dump_use_lossless, 1, 0);
-  dump_layout->addWidget(new QLabel(tr("Bitrate (kbps):")), 2, 0);
-  dump_layout->addWidget(m_dump_bitrate, 2, 1);
+  dump_layout->addWidget(new QLabel(tr("Video Codec:")), 0, 0);
+  dump_layout->addWidget(m_dump_codec_preset, 0, 1);
+  dump_layout->addWidget(new QLabel(tr("Bitrate (kbps):")), 1, 0);
+  dump_layout->addWidget(m_dump_bitrate, 1, 1);
 #endif
 
-  dump_layout->addWidget(new QLabel(tr("PNG Compression Level:")), 3, 0);
+  dump_layout->addWidget(new QLabel(tr("PNG Compression Level:")), 2, 0);
   m_png_compression_level->SetTitle(tr("PNG Compression Level"));
-  dump_layout->addWidget(m_png_compression_level, 3, 1);
+  dump_layout->addWidget(m_png_compression_level, 2, 1);
 
   // Misc.
   auto* misc_box = new QGroupBox(tr("Misc"));
@@ -217,9 +246,113 @@ void AdvancedWidget::ConnectWidgets()
           [](bool checked) { emit Settings::Instance().EnableGfxModsChanged(checked); });
 #if defined(HAVE_FFMPEG)
   connect(m_dump_use_lossless, &QCheckBox::toggled, this,
-          [this](bool checked) { m_dump_bitrate->setEnabled(!checked); });
+          [this](bool checked) {
+            m_dump_bitrate->setEnabled(!checked);
+            UpdateDumpCodecPresetControls();
+          });
+  connect(m_dump_codec_preset, &QComboBox::currentIndexChanged, this,
+          &AdvancedWidget::ApplyDumpCodecPreset);
+  connect(&Settings::Instance(), &Settings::ConfigChanged, this,
+          &AdvancedWidget::UpdateDumpCodecPresetControls);
+  UpdateDumpCodecPresetControls();
 #endif
 }
+
+#if defined(HAVE_FFMPEG)
+void AdvancedWidget::ApplyDumpCodecPreset(int index)
+{
+  if (index < 0 || !m_dump_codec_preset)
+    return;
+
+  const QString preset = m_dump_codec_preset->itemData(index).toString();
+  if (preset == QStringLiteral("custom"))
+  {
+    UpdateDumpCodecPresetControls();
+    return;
+  }
+
+  auto set_string = [](const Config::Info<std::string>& setting, std::string value) {
+    Config::SetBaseOrCurrent(setting, std::move(value));
+  };
+
+  if (preset == QStringLiteral("utvideo"))
+  {
+    Config::SetBaseOrCurrent(Config::GFX_USE_LOSSLESS, true);
+    set_string(Config::GFX_DUMP_FORMAT, "avi");
+    set_string(Config::GFX_DUMP_CODEC, "");
+    set_string(Config::GFX_DUMP_ENCODER, "");
+    set_string(Config::GFX_DUMP_PIXEL_FORMAT, "");
+  }
+  else if (preset == QStringLiteral("mp4_compatible"))
+  {
+    Config::SetBaseOrCurrent(Config::GFX_USE_LOSSLESS, false);
+    set_string(Config::GFX_DUMP_FORMAT, "mp4");
+    set_string(Config::GFX_DUMP_CODEC, "mpeg4");
+    set_string(Config::GFX_DUMP_ENCODER, "");
+    set_string(Config::GFX_DUMP_PIXEL_FORMAT, "yuv420p");
+    Config::SetBaseOrCurrent(Config::GFX_BITRATE_KBPS, 55000);
+  }
+  else if (preset == QStringLiteral("ffv1"))
+  {
+    Config::SetBaseOrCurrent(Config::GFX_USE_LOSSLESS, false);
+    set_string(Config::GFX_DUMP_FORMAT, "matroska");
+    set_string(Config::GFX_DUMP_CODEC, "ffv1");
+    set_string(Config::GFX_DUMP_ENCODER, "");
+    set_string(Config::GFX_DUMP_PIXEL_FORMAT, "");
+  }
+  else
+  {
+    Config::SetBaseOrCurrent(Config::GFX_USE_LOSSLESS, false);
+    set_string(Config::GFX_DUMP_FORMAT, "avi");
+    set_string(Config::GFX_DUMP_CODEC, "");
+    set_string(Config::GFX_DUMP_ENCODER, "");
+    set_string(Config::GFX_DUMP_PIXEL_FORMAT, "");
+  }
+
+  Config::OnConfigChanged();
+  UpdateDumpCodecPresetControls();
+}
+
+void AdvancedWidget::UpdateDumpCodecPresetControls()
+{
+  if (!m_dump_codec_preset)
+    return;
+
+  const bool lossless = Config::Get(Config::GFX_USE_LOSSLESS);
+  const std::string format = Config::Get(Config::GFX_DUMP_FORMAT);
+  const std::string codec = Config::Get(Config::GFX_DUMP_CODEC);
+  const std::string encoder = Config::Get(Config::GFX_DUMP_ENCODER);
+  const std::string pixel_format = Config::Get(Config::GFX_DUMP_PIXEL_FORMAT);
+  if (m_dump_bitrate)
+    m_dump_bitrate->setEnabled(!lossless);
+
+  QString preset = QStringLiteral("custom");
+  if (lossless && format == "avi" && codec.empty() && encoder.empty() && pixel_format.empty())
+    preset = QStringLiteral("utvideo");
+  else if (!lossless && format == "avi" && codec.empty() && encoder.empty() &&
+           pixel_format.empty())
+    preset = QStringLiteral("default");
+  else if (!lossless && format == "mp4" && codec == "mpeg4" && encoder.empty() &&
+           pixel_format == "yuv420p")
+    preset = QStringLiteral("mp4_compatible");
+  else if (!lossless && format == "matroska" && codec == "ffv1" && encoder.empty() &&
+           pixel_format.empty())
+    preset = QStringLiteral("ffv1");
+
+  const QSignalBlocker blocker(m_dump_codec_preset);
+  const int index = m_dump_codec_preset->findData(preset);
+  if (index >= 0)
+    m_dump_codec_preset->setCurrentIndex(index);
+}
+#else
+void AdvancedWidget::ApplyDumpCodecPreset(int)
+{
+}
+
+void AdvancedWidget::UpdateDumpCodecPresetControls()
+{
+}
+#endif
 
 void AdvancedWidget::OnBackendChanged()
 {

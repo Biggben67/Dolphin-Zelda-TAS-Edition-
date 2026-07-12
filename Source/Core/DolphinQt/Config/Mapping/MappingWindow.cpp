@@ -27,6 +27,7 @@
 #include "Common/StringUtil.h"
 
 #include "DolphinQt/Config/Mapping/FreeLookGeneral.h"
+#include "DolphinQt/Config/Mapping/FreeLookKeyframes.h"
 #include "DolphinQt/Config/Mapping/FreeLookRotation.h"
 #include "DolphinQt/Config/Mapping/GBAPadEmu.h"
 #include "DolphinQt/Config/Mapping/GCKeyboardEmu.h"
@@ -513,6 +514,7 @@ void MappingWindow::SetMappingType(MappingWindow::Type type)
     widget = new FreeLookGeneral(this);
     AddWidget(tr("General"), widget);
     AddWidget(tr("Rotation"), new FreeLookRotation(this));
+    AddWidget(tr("Keyframes"), new FreeLookKeyframes(this));
     setWindowTitle(tr("Free Look Controller %1").arg(GetPort() + 1));
   }
   break;

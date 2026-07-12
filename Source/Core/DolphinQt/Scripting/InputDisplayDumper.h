@@ -5,7 +5,9 @@
 #pragma once
 
 #include <atomic>
+#include <deque>
 #include <mutex>
+#include <optional>
 
 #include <QHash>
 #include <QImage>
@@ -25,7 +27,8 @@
 class InputDisplayDumper
 {
 public:
-  explicit InputDisplayDumper(const GCSkin& skin, int port = 0);
+  explicit InputDisplayDumper(const GCSkin& skin, int port = 0,
+                              bool force_black_background = false);
   ~InputDisplayDumper();
 
   void Start();
@@ -34,13 +37,16 @@ public:
 private:
   void OnFrameAdvance();
   QImage RenderSkin(const GCPadStatus& pad, bool connected);
+  std::optional<GCPadStatus> GetDelayedStatus(std::optional<GCPadStatus> status);
   const QImage& LoadImage(const QString& path);
   const QImage& TintedImage(const QString& path, u32 argb);
 
   const GCSkin& m_skin;
   int m_port;
+  bool m_force_black_background = false;
   std::atomic<bool> m_active{false};
   API::ListenerID<API::Events::FrameAdvance> m_listener;
+  std::deque<std::optional<GCPadStatus>> m_status_history;
 
   std::mutex m_dump_mutex;  // guards the encoder against a concurrent Stop()
 #if defined(HAVE_FFMPEG)

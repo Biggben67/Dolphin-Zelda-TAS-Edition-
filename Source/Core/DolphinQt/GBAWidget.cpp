@@ -8,6 +8,7 @@
 #include <fmt/format.h>
 
 #include <array>
+#include <mutex>
 
 #include <QAction>
 #include <QCloseEvent>
@@ -41,6 +42,8 @@
 namespace
 {
 std::array<QPointer<GBAWidget>, 4> s_gba_widgets;
+std::array<QImage, 4> s_latest_gba_frames;
+std::mutex s_latest_gba_frames_mutex;
 }
 
 static void RestartCore(const std::weak_ptr<HW::GBA::Core>& core, std::string_view rom_path = {})
@@ -131,7 +134,22 @@ void GBAWidget::SetVideoBuffer(std::span<const u32> video_buffer)
   {
     m_last_frame = QImage();
   }
+  if (m_core_info.device_number >= 0 &&
+      m_core_info.device_number < static_cast<int>(s_latest_gba_frames.size()))
+  {
+    std::lock_guard lock(s_latest_gba_frames_mutex);
+    s_latest_gba_frames[m_core_info.device_number] = m_last_frame.copy();
+  }
   update();
+}
+
+QImage GBAWidget::GetLatestFrameForDevice(int device_number)
+{
+  if (device_number < 0 || device_number >= static_cast<int>(s_latest_gba_frames.size()))
+    return {};
+
+  std::lock_guard lock(s_latest_gba_frames_mutex);
+  return s_latest_gba_frames[device_number].copy();
 }
 
 void GBAWidget::SetVolume(int volume)

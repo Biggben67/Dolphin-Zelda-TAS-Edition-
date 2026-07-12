@@ -79,6 +79,8 @@ add_executable(dolphin-emu
   Config/ControllersPane.h
   Config/FilesystemWidget.cpp
   Config/FilesystemWidget.h
+  Config/FreeLookKeyframeEditor.cpp
+  Config/FreeLookKeyframeEditor.h
   Config/FreeLookWidget.cpp
   Config/FreeLookWidget.h
   Config/FreeLookWindow.cpp
@@ -121,6 +123,8 @@ add_executable(dolphin-emu
   Config/LogWidget.h
   Config/Mapping/FreeLookGeneral.cpp
   Config/Mapping/FreeLookGeneral.h
+  Config/Mapping/FreeLookKeyframes.cpp
+  Config/Mapping/FreeLookKeyframes.h
   Config/Mapping/FreeLookRotation.cpp
   Config/Mapping/FreeLookRotation.h
   Config/Mapping/GBAPadEmu.cpp

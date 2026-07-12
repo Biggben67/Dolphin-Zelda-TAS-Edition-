@@ -9,6 +9,8 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <optional>
+#include <set>
 #include <utility>
 #include <vector>
 
@@ -48,6 +50,7 @@
 #include <QSpinBox>
 #include <QStyle>
 #include <QTabWidget>
+#include <QThread>
 #include <QTimer>
 #include <QToolButton>
 #include <QVBoxLayout>
@@ -58,6 +61,8 @@
 #include "Core/Core.h"
 #include "Core/Config/MainSettings.h"
 #include "Core/CoreTiming.h"
+#include "Core/HW/SystemTimers.h"
+#include "Core/HW/VideoInterface.h"
 #include "Core/System.h"
 
 #include "DolphinQt/GBAWidget.h"
@@ -65,6 +70,7 @@
 #include "DolphinQt/Scripting/InputDisplayWidget.h"
 
 #include "VideoCommon/FrameDumper.h"
+#include "VideoCommon/OnScreenDisplay.h"
 
 #if defined(HAVE_FFMPEG)
 #include "VideoCommon/FrameDumpFFMpeg.h"
@@ -834,6 +840,29 @@ int DefaultUpscaleForWidget(QWidget* widget)
   return DEFAULT_WINDOW_UPSCALE;
 }
 
+std::string SanitizeDumpName(const QString& name)
+{
+  QString sanitized;
+  sanitized.reserve(name.size());
+  for (const QChar ch : name)
+  {
+    if (ch.isLetterOrNumber() || ch == QLatin1Char('_') || ch == QLatin1Char('-'))
+      sanitized.append(ch);
+    else if (ch.isSpace() || ch == QLatin1Char('.') || ch == QLatin1Char('|') ||
+             ch == QLatin1Char(':'))
+      sanitized.append(QLatin1Char('_'));
+  }
+
+  sanitized = sanitized.simplified();
+  sanitized.replace(QLatin1Char(' '), QLatin1Char('_'));
+  while (sanitized.contains(QStringLiteral("__")))
+    sanitized.replace(QStringLiteral("__"), QStringLiteral("_"));
+  sanitized = sanitized.trimmed();
+  if (sanitized.isEmpty())
+    sanitized = QStringLiteral("Source");
+  return sanitized.left(80).toStdString();
+}
+
 QImage UpscaleNearest(const QImage& image, int scale)
 {
   if (image.isNull() || scale <= 1)
@@ -841,6 +870,19 @@ QImage UpscaleNearest(const QImage& image, int scale)
 
   return image.scaled(image.width() * scale, image.height() * scale, Qt::IgnoreAspectRatio,
                       Qt::FastTransformation);
+}
+
+QImage FlattenOnBlack(const QImage& image)
+{
+  if (image.isNull())
+    return {};
+
+  QImage flattened(image.size(), QImage::Format_RGBA8888);
+  flattened.fill(Qt::black);
+  QPainter painter(&flattened);
+  painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
+  painter.drawImage(0, 0, image);
+  return flattened;
 }
 
 QRect RoundedCanvasRect(const QRectF& rect, const QSize& canvas_size)
@@ -854,18 +896,6 @@ QRect RoundedCanvasRect(const QRectF& rect, const QSize& canvas_size)
   return rounded;
 }
 
-QImage ScaleForCanvas(const QImage& image, const QSize& target_size, bool smooth)
-{
-  if (image.isNull() || !target_size.isValid())
-    return {};
-
-  if (image.size() == target_size)
-    return image;
-
-  return image.scaled(target_size, Qt::IgnoreAspectRatio,
-                      smooth ? Qt::SmoothTransformation : Qt::FastTransformation);
-}
-
 QImage CaptureWidgetOffscreen(QWidget* widget, const QImage& game_frame, int upscale_factor)
 {
   if (!widget || !widget->isVisible() || widget->width() <= 0 || widget->height() <= 0)
@@ -876,7 +906,25 @@ QImage CaptureWidgetOffscreen(QWidget* widget, const QImage& game_frame, int ups
 
 #if defined(HAS_LIBMGBA)
   if (const auto* gba = qobject_cast<GBAWidget*>(widget))
-    return UpscaleNearest(gba->GetCurrentFrame(), upscale_factor);
+  {
+    std::vector<u32> video_buffer;
+    u32 width = 0;
+    u32 height = 0;
+    QImage frame;
+    if (HW::GBA::Core::GetLatestVideoFrame(gba->GetDeviceNumber(), &video_buffer, &width,
+                                           &height))
+    {
+      frame = QImage(reinterpret_cast<const uchar*>(video_buffer.data()), static_cast<int>(width),
+                     static_cast<int>(height), QImage::Format_ARGB32)
+                  .convertToFormat(QImage::Format_RGB32)
+                  .rgbSwapped();
+    }
+    if (frame.isNull())
+      frame = GBAWidget::GetLatestFrameForDevice(gba->GetDeviceNumber());
+    if (frame.isNull())
+      frame = gba->GetCurrentFrame();
+    return UpscaleNearest(frame, upscale_factor);
+  }
 #endif
 
   if (auto* input_display = qobject_cast<InputDisplayWidget*>(widget))
@@ -969,6 +1017,16 @@ private:
     bool automatically_sized = false;
   };
 
+#if defined(HAVE_FFMPEG)
+  struct SourceDump
+  {
+    std::unique_ptr<FFMpegFrameDump> dump;
+    u64 frame_count = 0;
+    u64 start_ticks = 0;
+    bool failed = false;
+  };
+#endif
+
   void BuildUi()
   {
     m_owner->setWindowTitle(FrameDumpManager::tr("Frame Dump Manager"));
@@ -1003,6 +1061,11 @@ private:
     toolbar->addWidget(m_aspect_4_3);
     toolbar->addWidget(m_aspect_16_9);
 
+    m_lock_aspect_ratio = new QCheckBox(FrameDumpManager::tr("Lock Aspect Ratio"), m_owner);
+    m_lock_aspect_ratio->setToolTip(FrameDumpManager::tr(
+        "Use the selected source window's current aspect ratio for the output canvas."));
+    toolbar->addWidget(m_lock_aspect_ratio);
+
     m_output_label = new QLabel(m_owner);
     toolbar->addWidget(m_output_label);
     toolbar->addStretch();
@@ -1020,6 +1083,12 @@ private:
     m_dump_audio->setToolTip(FrameDumpManager::tr(
         "Dump DSP, DTK, and connected GBA audio as separate WAV files."));
     toolbar->addWidget(m_dump_audio);
+
+    m_dump_selected_windows =
+        new QCheckBox(FrameDumpManager::tr("Dump Windows Separately"), m_owner);
+    m_dump_selected_windows->setToolTip(FrameDumpManager::tr(
+        "Dump each visible source window as a separate video at its captured source resolution."));
+    toolbar->addWidget(m_dump_selected_windows);
 
     m_show_preview = new QCheckBox(FrameDumpManager::tr("Show Preview"), m_owner);
     m_show_preview->setToolTip(FrameDumpManager::tr(
@@ -1090,6 +1159,24 @@ private:
                        if (checked)
                          UpdateOutputSize(true);
                      });
+    QObject::connect(m_lock_aspect_ratio, &QCheckBox::toggled, m_owner, [this](bool checked) {
+      if (checked)
+      {
+        if (!LockAspectRatioToSelectedSource())
+        {
+          const QSignalBlocker blocker(m_lock_aspect_ratio);
+          m_lock_aspect_ratio->setChecked(false);
+          m_locked_aspect_ratio.reset();
+          return;
+        }
+      }
+      else
+      {
+        m_locked_aspect_ratio.reset();
+        UpdateOutputSize(true);
+      }
+      SaveSettings();
+    });
     QObject::connect(reset_button, &QPushButton::clicked, m_owner, [this] { ResetLayout(); });
     QObject::connect(m_snap_to_edges, &QCheckBox::toggled, m_owner,
                      [this](bool enabled) {
@@ -1111,6 +1198,7 @@ private:
                        const bool visible = item->checkState() == Qt::Checked;
                        it->second.composition_item->setVisible(visible);
                        SaveSourceState(key);
+                       UpdateGBAFrameConsumer();
                        UpdateStatus();
                      });
     QObject::connect(m_settings_source_combo, &QComboBox::currentIndexChanged, m_owner,
@@ -1158,8 +1246,60 @@ private:
   QSize SelectedOutputSize() const
   {
     const int height = m_resolution_combo->currentData().toInt();
-    const bool widescreen = m_aspect_16_9->isChecked();
-    return QSize(widescreen ? height * 16 / 9 : height * 4 / 3, height);
+    qreal aspect = m_aspect_16_9->isChecked() ? 16.0 / 9.0 : 4.0 / 3.0;
+    if (m_lock_aspect_ratio && m_lock_aspect_ratio->isChecked() && m_locked_aspect_ratio &&
+        *m_locked_aspect_ratio > 0.0)
+    {
+      aspect = *m_locked_aspect_ratio;
+    }
+
+    int width = qRound(height * aspect);
+    const int remainder = width % 4;
+    if (remainder != 0)
+      width += 4 - remainder;
+    return QSize(std::max(4, width), height);
+  }
+
+  std::optional<qreal> SelectedSourceAspectRatio() const
+  {
+    QString key = SelectedSettingsKey();
+    if (key.isEmpty() && m_source_list && m_source_list->currentItem())
+      key = m_source_list->currentItem()->data(Qt::UserRole).toString();
+    const auto it = m_sources.find(key);
+    if (it == m_sources.end())
+      return std::nullopt;
+
+    if (it->second.composition_item && !it->second.composition_item->GetPixmap().isNull())
+    {
+      const QSize size = it->second.composition_item->GetPixmap().size();
+      if (size.width() > 0 && size.height() > 0)
+        return static_cast<qreal>(size.width()) / size.height();
+    }
+
+    if (it->second.widget && it->second.widget->width() > 0 && it->second.widget->height() > 0)
+      return static_cast<qreal>(it->second.widget->width()) / it->second.widget->height();
+
+    if (it->second.composition_item && it->second.composition_item->LayoutRect().height() > 0.0)
+      return it->second.composition_item->LayoutRect().width() /
+             it->second.composition_item->LayoutRect().height();
+
+    return std::nullopt;
+  }
+
+  bool LockAspectRatioToSelectedSource()
+  {
+    const std::optional<qreal> aspect = SelectedSourceAspectRatio();
+    if (!aspect || !std::isfinite(*aspect) || *aspect <= 0.0)
+    {
+      QMessageBox::information(
+          m_owner, FrameDumpManager::tr("Frame Dump Manager"),
+          FrameDumpManager::tr("Select a visible source window before locking the aspect ratio."));
+      return false;
+    }
+
+    m_locked_aspect_ratio = *aspect;
+    UpdateOutputSize(true);
+    return true;
   }
 
   void UpdateOutputSize(bool scale_layout)
@@ -1200,7 +1340,21 @@ private:
     const bool widescreen = settings.value(QStringLiteral("widescreen"), true).toBool();
     m_aspect_16_9->setChecked(widescreen);
     m_aspect_4_3->setChecked(!widescreen);
+    m_locked_aspect_ratio = settings.value(QStringLiteral("lockedAspectRatio"), 0.0).toDouble();
+    if (m_locked_aspect_ratio && *m_locked_aspect_ratio <= 0.0)
+      m_locked_aspect_ratio.reset();
+    {
+      const QSignalBlocker blocker(m_lock_aspect_ratio);
+      m_lock_aspect_ratio->setChecked(
+          settings.value(QStringLiteral("lockAspectRatio"), false).toBool() &&
+          m_locked_aspect_ratio.has_value());
+    }
     m_dump_audio->setChecked(settings.value(QStringLiteral("dumpAudio"), false).toBool());
+    m_dump_selected_windows->setChecked(
+        settings
+            .value(QStringLiteral("dumpWindowsSeparately"),
+                   settings.value(QStringLiteral("dumpSelectedWindows"), false))
+            .toBool());
     m_show_preview->setChecked(settings.value(QStringLiteral("showPreview"), true).toBool());
     m_preview_enabled.store(m_show_preview->isChecked());
     m_view->SetPreviewEnabled(m_preview_enabled.load());
@@ -1257,7 +1411,11 @@ private:
     settings.beginGroup(QStringLiteral("FrameDumpManager"));
     settings.setValue(QStringLiteral("height"), m_resolution_combo->currentData().toInt());
     settings.setValue(QStringLiteral("widescreen"), m_aspect_16_9->isChecked());
+    settings.setValue(QStringLiteral("lockAspectRatio"), m_lock_aspect_ratio->isChecked());
+    settings.setValue(QStringLiteral("lockedAspectRatio"), m_locked_aspect_ratio.value_or(0.0));
     settings.setValue(QStringLiteral("dumpAudio"), m_dump_audio->isChecked());
+    settings.setValue(QStringLiteral("dumpWindowsSeparately"),
+                      m_dump_selected_windows->isChecked());
     settings.setValue(QStringLiteral("showPreview"), m_show_preview->isChecked());
     settings.setValue(QStringLiteral("snap"), m_snap_to_edges->isChecked());
     settings.setValue(QStringLiteral("geometry"), m_owner->saveGeometry());
@@ -1523,6 +1681,7 @@ private:
     }
     RebuildSourceListLayerOrder();
     RebuildSettingsSourceCombo();
+    UpdateGBAFrameConsumer();
     UpdateStatus();
   }
 
@@ -1613,12 +1772,35 @@ private:
 
     if (m_dumping.load())
     {
-      m_status_label->setText(
-          FrameDumpManager::tr("Dumping %1 x %2 | %3 sources | %4 frames")
-              .arg(m_output_size.width())
-              .arg(m_output_size.height())
-              .arg(visible)
-              .arg(m_frame_count));
+      if (IsSelectedWindowDumpMode())
+      {
+#if defined(HAVE_FFMPEG)
+        int active_dumps = 0;
+        int failed_dumps = 0;
+        for (const auto& [key, source_dump] : m_source_dumps)
+        {
+          if (source_dump.failed)
+            ++failed_dumps;
+          else if (source_dump.dump && source_dump.dump->IsStarted())
+            ++active_dumps;
+        }
+
+        m_status_label->setText(
+            FrameDumpManager::tr("Dumping windows separately | %1 sources | %2 active | %3 failed")
+                .arg(visible)
+                .arg(active_dumps)
+                .arg(failed_dumps));
+#endif
+      }
+      else
+      {
+        m_status_label->setText(
+            FrameDumpManager::tr("Dumping %1 x %2 | %3 sources | %4 frames")
+                .arg(m_output_size.width())
+                .arg(m_output_size.height())
+                .arg(visible)
+                .arg(m_frame_count));
+      }
     }
     else
     {
@@ -1658,20 +1840,30 @@ private:
                            FrameDumpManager::tr("The game frame source is not available."));
       return;
     }
-    const u64 ticks = Core::System::GetInstance().GetCoreTiming().GetTicks();
-    if (!m_dump.Start(m_output_size.width(), m_output_size.height(), ticks, "Composite"))
+    constexpr u64 start_ticks = 0;
+    m_dump_start_ticks = start_ticks;
+    m_frame_count = 0;
+    StopSourceDumps();
+
+    const bool dump_selected_windows = m_dump_selected_windows->isChecked();
+    if (!dump_selected_windows &&
+        !m_dump.Start(m_output_size.width(), m_output_size.height(), start_ticks, "Composite"))
     {
+      if (!m_preview_enabled.load())
+        UnregisterFrameConsumer();
       QMessageBox::warning(m_owner, FrameDumpManager::tr("Frame Dump Manager"),
                            FrameDumpManager::tr("The composite frame dump could not be started."));
       return;
     }
-    m_frame_count = 0;
     m_dumping.store(true);
+    UpdateGBAFrameConsumer();
     StartAudioDump();
     m_resolution_combo->setEnabled(false);
     m_aspect_4_3->setEnabled(false);
     m_aspect_16_9->setEnabled(false);
+    m_lock_aspect_ratio->setEnabled(false);
     m_dump_audio->setEnabled(false);
+    m_dump_selected_windows->setEnabled(false);
     m_dump_button->setText(FrameDumpManager::tr("Stop Dump"));
     m_dump_button->setIcon(m_owner->style()->standardIcon(QStyle::SP_MediaStop));
     UpdateStatus();
@@ -1682,8 +1874,10 @@ private:
   {
 #if defined(HAVE_FFMPEG)
     m_dumping.store(false);
+    UpdateGBAFrameConsumer();
     if (m_dump.IsStarted())
       m_dump.Stop();
+    StopSourceDumps();
 #endif
     StopAudioDump();
     if (!m_dump_button)
@@ -1691,12 +1885,230 @@ private:
     m_resolution_combo->setEnabled(true);
     m_aspect_4_3->setEnabled(true);
     m_aspect_16_9->setEnabled(true);
+    m_lock_aspect_ratio->setEnabled(true);
     m_dump_audio->setEnabled(true);
+    m_dump_selected_windows->setEnabled(true);
     if (!m_preview_enabled.load())
       UnregisterFrameConsumer();
     m_dump_button->setText(FrameDumpManager::tr("Start Dump"));
     m_dump_button->setIcon(m_owner->style()->standardIcon(QStyle::SP_MediaPlay));
     UpdateStatus();
+  }
+
+  bool IsSelectedWindowDumpMode() const
+  {
+#if defined(HAVE_FFMPEG)
+    return m_dump_selected_windows && m_dump_selected_windows->isChecked();
+#else
+    return false;
+#endif
+  }
+
+  void StopSourceDumps()
+  {
+#if defined(HAVE_FFMPEG)
+    for (auto& [key, source_dump] : m_source_dumps)
+    {
+      if (source_dump.dump && source_dump.dump->IsStarted())
+        source_dump.dump->Stop();
+    }
+    m_source_dumps.clear();
+#endif
+  }
+
+  u64 SyntheticTicksForFrame(u64 start_ticks, u64 frame_count, u64 fallback_ticks) const
+  {
+    Core::System& system = Core::System::GetInstance();
+    const u64 ticks_per_second = system.GetSystemTimers().GetTicksPerSecond();
+    const u64 refresh_num = system.GetVideoInterface().GetTargetRefreshRateNumerator();
+    const u64 refresh_den = system.GetVideoInterface().GetTargetRefreshRateDenominator();
+    if (ticks_per_second == 0 || refresh_num == 0 || refresh_den == 0)
+      return fallback_ticks;
+
+    return start_ticks +
+           (frame_count * ticks_per_second * refresh_den + refresh_num / 2) / refresh_num;
+  }
+
+  void CaptureSelectedSourceFrames(const QImage& game_frame, const FrameState& source_state,
+                                   std::optional<int> gba_device)
+  {
+#if defined(HAVE_FFMPEG)
+    if (!m_dumping.load() || !IsSelectedWindowDumpMode())
+      return;
+
+    for (const auto& [key, source] : m_sources)
+    {
+      if (!source.widget || !source.composition_item->isVisible())
+        continue;
+
+#if defined(HAS_LIBMGBA)
+      const auto* gba = qobject_cast<GBAWidget*>(source.widget);
+      if (gba_device)
+      {
+        if (!gba || gba->GetDeviceNumber() != *gba_device)
+          continue;
+      }
+      else if (gba)
+      {
+        continue;
+      }
+#else
+      if (gba_device)
+        continue;
+#endif
+
+      const QImage source_image =
+          CaptureWidgetOffscreen(source.widget, game_frame, source.upscale_factor);
+      if (!source_image.isNull())
+      {
+        const auto* input_display = qobject_cast<InputDisplayWidget*>(source.widget);
+        const bool force_black_background =
+            input_display && input_display->IsBackgroundRemoved();
+        DumpSourceFrame(key, source.label, source_image, source_state, force_black_background);
+      }
+    }
+#endif
+  }
+
+  void DumpSourceFrame(const QString& key, const QString& label, const QImage& image,
+                       const FrameState& source_state, bool force_black_background)
+  {
+#if defined(HAVE_FFMPEG)
+    if (image.isNull())
+      return;
+
+    QImage rgba = force_black_background ? FlattenOnBlack(image) :
+                                           image.convertToFormat(QImage::Format_RGBA8888);
+    if (rgba.isNull())
+      return;
+
+    SourceDump& source_dump = m_source_dumps[key];
+    if (source_dump.failed)
+      return;
+
+    if (!source_dump.dump)
+      source_dump.dump = std::make_unique<FFMpegFrameDump>();
+
+    if (!source_dump.dump->IsStarted())
+    {
+      source_dump.start_ticks = 0;
+      source_dump.frame_count = 0;
+      const std::string prefix =
+          std::string("FrameDumpManager/") + SanitizeDumpName(label + QStringLiteral("_") + key);
+      if (!source_dump.dump->Start(rgba.width(), rgba.height(), source_dump.start_ticks, prefix))
+      {
+        source_dump.failed = true;
+        OSD::AddMessage("Frame Dump Manager: failed to start separate dump for " +
+                        label.toStdString(),
+                        OSD::Duration::NORMAL, OSD::Color::RED);
+        UpdateStatus();
+        return;
+      }
+    }
+
+    const u64 ticks =
+        SyntheticTicksForFrame(source_dump.start_ticks, source_dump.frame_count, source_state.ticks);
+
+    FrameData frame;
+    frame.data = rgba.constBits();
+    frame.width = rgba.width();
+    frame.height = rgba.height();
+    frame.stride = static_cast<int>(rgba.bytesPerLine());
+    frame.state = source_dump.dump->FetchState(ticks, static_cast<int>(source_dump.frame_count));
+    source_dump.dump->AddFrame(frame);
+    if (!source_dump.dump->IsStarted())
+    {
+      source_dump.failed = true;
+      OSD::AddMessage("Frame Dump Manager: separate dump stopped for " + label.toStdString(),
+                      OSD::Duration::VERY_LONG, OSD::Color::RED);
+      UpdateStatus();
+      return;
+    }
+
+    ++source_dump.frame_count;
+    if (source_dump.frame_count % 30 == 0)
+      UpdateStatus();
+#endif
+  }
+
+  std::optional<int> VisibleGBAPacerDevice() const
+  {
+#if defined(HAS_LIBMGBA)
+    std::optional<int> device;
+    for (const auto& [key, source] : m_sources)
+    {
+      if (!source.widget || !source.composition_item->isVisible())
+        continue;
+      const auto* gba = qobject_cast<GBAWidget*>(source.widget);
+      if (!gba)
+        continue;
+      const int source_device = gba->GetDeviceNumber();
+      if (!device || source_device < *device)
+        device = source_device;
+    }
+    return device;
+#else
+    return std::nullopt;
+#endif
+  }
+
+  u64 SyntheticDumpTicksForNextFrame(u64 fallback_ticks) const
+  {
+    return SyntheticTicksForFrame(m_dump_start_ticks, m_frame_count, fallback_ticks);
+  }
+
+  void UpdateGBAFrameConsumer()
+  {
+#if defined(HAS_LIBMGBA)
+    const std::optional<int> pacer_device = m_dumping.load() ? VisibleGBAPacerDevice() :
+                                                              std::nullopt;
+    m_gba_pacer_device.store(pacer_device.value_or(-1));
+    m_gba_frame_pacer_active.store(pacer_device.has_value());
+
+    if (pacer_device && m_gba_frame_callback_id == 0)
+    {
+      QPointer<FrameDumpManager> owner = m_owner;
+      m_gba_frame_callback_id =
+          HW::GBA::Core::AddVideoFrameCallback([owner](int device_number, u64 ticks) {
+            if (!owner || !owner->m_impl)
+              return;
+
+            const auto invoke = [owner, device_number, ticks] {
+              if (!owner || !owner->m_impl)
+                return;
+              owner->m_impl->CaptureGBAClockedFrame(device_number, ticks);
+            };
+
+            if (QThread::currentThread() == owner->thread())
+              invoke();
+            else
+              QMetaObject::invokeMethod(owner, invoke, Qt::BlockingQueuedConnection);
+          });
+    }
+    else if (!pacer_device && m_gba_frame_callback_id != 0)
+    {
+      HW::GBA::Core::RemoveVideoFrameCallback(m_gba_frame_callback_id);
+      m_gba_frame_callback_id = 0;
+    }
+#endif
+  }
+
+  void CaptureGBAClockedFrame(int device_number, u64 ticks)
+  {
+#if defined(HAVE_FFMPEG)
+    if (!m_dumping.load())
+      return;
+
+    FrameState state;
+    state.ticks = SyntheticDumpTicksForNextFrame(ticks);
+    if (IsSelectedWindowDumpMode())
+      CaptureSelectedSourceFrames(m_latest_game_frame, state, device_number);
+    else if (m_dump.IsStarted() && m_gba_frame_pacer_active.load() &&
+             m_gba_pacer_device.load() == device_number)
+    {
+      CaptureDumpFrame(m_latest_game_frame, state);
+    }
+#endif
   }
 
   void CaptureDumpFrame(const QImage& game_frame, const FrameState& source_state)
@@ -1705,9 +2117,14 @@ private:
     if (!m_dumping.load() || !m_dump.IsStarted())
       return;
 
-    QImage image(m_output_size, QImage::Format_RGBA8888);
-    image.fill(Qt::black);
-    QPainter painter(&image);
+    if (m_composite_frame.size() != m_output_size ||
+        m_composite_frame.format() != QImage::Format_RGBA8888)
+    {
+      m_composite_frame = QImage(m_output_size, QImage::Format_RGBA8888);
+    }
+    m_composite_frame.fill(Qt::black);
+
+    QPainter painter(&m_composite_frame);
     painter.setRenderHint(QPainter::Antialiasing, false);
     std::vector<SourceEntry*> ordered_sources;
     ordered_sources.reserve(m_sources.size());
@@ -1730,21 +2147,19 @@ private:
         if (!target_rect.isValid() || target_rect.isEmpty())
           continue;
 
-        const bool smooth_scale = IsGameWidget(source->widget);
-        const QImage scaled_source =
-            ScaleForCanvas(source_image, target_rect.size(), smooth_scale);
-        if (!scaled_source.isNull())
-          painter.drawImage(target_rect.topLeft(), scaled_source);
+        painter.setRenderHint(QPainter::SmoothPixmapTransform, IsGameWidget(source->widget));
+        painter.drawImage(target_rect, source_image, source_image.rect());
       }
     }
     painter.end();
 
     FrameData frame;
-    frame.data = image.constBits();
-    frame.width = image.width();
-    frame.height = image.height();
-    frame.stride = static_cast<int>(image.bytesPerLine());
-    frame.state = m_dump.FetchState(source_state.ticks, static_cast<int>(m_frame_count));
+    frame.data = m_composite_frame.constBits();
+    frame.width = m_composite_frame.width();
+    frame.height = m_composite_frame.height();
+    frame.stride = static_cast<int>(m_composite_frame.bytesPerLine());
+    const u64 ticks = SyntheticDumpTicksForNextFrame(source_state.ticks);
+    frame.state = m_dump.FetchState(ticks, static_cast<int>(m_frame_count));
     m_dump.AddFrame(frame);
     ++m_frame_count;
     if (m_frame_count % 30 == 0)
@@ -1778,21 +2193,41 @@ private:
 
       const QImage view(frame.data, frame.width, frame.height, frame.stride,
                         QImage::Format_RGBA8888);
+      if (dumping)
+      {
+        const FrameState state = frame.state;
+        QMetaObject::invokeMethod(
+            owner,
+            [owner, view, state, preview] {
+              if (!owner || !owner->m_impl)
+                return;
+              Impl* current = owner->m_impl.get();
+              current->m_preview_frame_queued.store(false);
+              const bool gba_paced = current->m_gba_frame_pacer_active.load();
+              const bool selected_window_dump = current->IsSelectedWindowDumpMode();
+              if (preview || gba_paced || selected_window_dump)
+                current->m_latest_game_frame = view.copy();
+              if (selected_window_dump)
+                current->CaptureSelectedSourceFrames(view, state, std::nullopt);
+              else if (!gba_paced && current->m_dumping.load())
+                current->CaptureDumpFrame(view, state);
+            },
+            Qt::BlockingQueuedConnection);
+        return;
+      }
+
       QImage copy = view.copy();
-      const FrameState state = frame.state;
       QMetaObject::invokeMethod(
           owner,
-          [owner, copy = std::move(copy), state, dumping, preview]() mutable {
+          [owner, copy = std::move(copy), preview]() mutable {
             if (!owner || !owner->m_impl)
               return;
             Impl* current = owner->m_impl.get();
             current->m_preview_frame_queued.store(false);
             if (preview)
               current->m_latest_game_frame = copy;
-            if (dumping && current->m_dumping.load())
-              current->CaptureDumpFrame(copy, state);
           },
-          dumping ? Qt::BlockingQueuedConnection : Qt::QueuedConnection);
+          Qt::QueuedConnection);
     });
   }
 
@@ -1861,7 +2296,9 @@ private:
   QComboBox* m_resolution_combo = nullptr;
   QToolButton* m_aspect_4_3 = nullptr;
   QToolButton* m_aspect_16_9 = nullptr;
+  QCheckBox* m_lock_aspect_ratio = nullptr;
   QCheckBox* m_dump_audio = nullptr;
+  QCheckBox* m_dump_selected_windows = nullptr;
   QCheckBox* m_show_preview = nullptr;
   QCheckBox* m_snap_to_edges = nullptr;
   QLabel* m_output_label = nullptr;
@@ -1874,15 +2311,24 @@ private:
   QLabel* m_status_label = nullptr;
   QTimer m_preview_timer;
   QSize m_output_size;
+  std::optional<qreal> m_locked_aspect_ratio;
   int m_discovery_counter = 0;
   u64 m_frame_count = 0;
+  u64 m_dump_start_ticks = 0;
   std::map<QString, SourceEntry> m_sources;
   std::map<QString, SavedSource> m_saved_sources;
+#if defined(HAVE_FFMPEG)
+  std::map<QString, SourceDump> m_source_dumps;
+#endif
   std::atomic<bool> m_dumping{false};
   std::atomic<bool> m_preview_enabled{true};
   std::atomic<bool> m_preview_frame_queued{false};
+  std::atomic<bool> m_gba_frame_pacer_active{false};
+  std::atomic<int> m_gba_pacer_device{-1};
   QImage m_latest_game_frame;
+  QImage m_composite_frame;
   u64 m_frame_callback_id = 0;
+  u64 m_gba_frame_callback_id = 0;
   FrameDumper* m_registered_frame_dumper = nullptr;
   bool m_audio_settings_overridden = false;
   bool m_started_main_audio_dump = false;

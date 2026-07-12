@@ -4,6 +4,7 @@
 #pragma once
 
 #include <array>
+#include <set>
 #include <vector>
 
 #include <QDialog>
@@ -25,6 +26,7 @@ class QStackedWidget;
 class QTableView;
 class QTimer;
 class QHideEvent;
+class QWidget;
 class DTMEditorModel;
 
 class DTMEditorDialog final : public QDialog
@@ -42,6 +44,98 @@ private:
   {
     int row = -1;
     int column = -1;
+  };
+
+  enum class InputField
+  {
+    GCConnected,
+    GCStart,
+    GCA,
+    GCB,
+    GCX,
+    GCY,
+    GCZ,
+    GCL,
+    GCR,
+    GCUp,
+    GCDown,
+    GCLeft,
+    GCRight,
+    GCDisc,
+    GCReset,
+    GCGetOrigin,
+    GCTriggerL,
+    GCTriggerR,
+    GCStickX,
+    GCStickY,
+    GCCStickX,
+    GCCStickY,
+    WiiReset,
+    WiiA,
+    WiiB,
+    WiiOne,
+    WiiTwo,
+    WiiPlus,
+    WiiMinus,
+    WiiHome,
+    WiiUp,
+    WiiDown,
+    WiiLeft,
+    WiiRight,
+    WiiAccelX,
+    WiiAccelY,
+    WiiAccelZ,
+    WiiBattery,
+    WiiIR1Visible,
+    WiiIR1X,
+    WiiIR1Y,
+    WiiIR1Size,
+    WiiIR2Visible,
+    WiiIR2X,
+    WiiIR2Y,
+    WiiIR2Size,
+    WiiIR3Visible,
+    WiiIR3X,
+    WiiIR3Y,
+    WiiIR3Size,
+    WiiIR4Visible,
+    WiiIR4X,
+    WiiIR4Y,
+    WiiIR4Size,
+    WiiGyroX,
+    WiiGyroY,
+    WiiGyroZ,
+    WiiGyroSlowX,
+    WiiGyroSlowY,
+    WiiGyroSlowZ,
+    WiiNunchukC,
+    WiiNunchukZ,
+    WiiNunchukStickX,
+    WiiNunchukStickY,
+    WiiNunchukAccelX,
+    WiiNunchukAccelY,
+    WiiNunchukAccelZ,
+    WiiClassicA,
+    WiiClassicB,
+    WiiClassicX,
+    WiiClassicY,
+    WiiClassicZL,
+    WiiClassicZR,
+    WiiClassicL,
+    WiiClassicR,
+    WiiClassicMinus,
+    WiiClassicPlus,
+    WiiClassicHome,
+    WiiClassicUp,
+    WiiClassicDown,
+    WiiClassicLeft,
+    WiiClassicRight,
+    WiiClassicLeftX,
+    WiiClassicLeftY,
+    WiiClassicRightX,
+    WiiClassicRightY,
+    WiiClassicTriggerL,
+    WiiClassicTriggerR,
   };
 
   enum class EditorMovieKind
@@ -76,6 +170,21 @@ private:
   bool HasCopiedInputs() const;
   bool HasCompatibleCopiedInputs() const;
   void ShowTableContextMenu(const QPoint& pos);
+  void RegisterInputField(QWidget* widget, InputField field);
+  void ToggleSelectedInputField(InputField field);
+  bool IsInputFieldFilterActive() const;
+  std::set<InputField> ActiveInputFieldFilter() const;
+  void UpdateInputFieldSelectionStyles();
+  Movie::ControllerState CopyGCInputFields(const Movie::ControllerState& destination,
+                                           const Movie::ControllerState& source,
+                                           const std::set<InputField>& fields) const;
+  Movie::ControllerState NeutralizeGCInputFields(const Movie::ControllerState& state,
+                                                 const std::set<InputField>& fields) const;
+  Movie::WiiRuntimeInputRow CopyWiiInputFields(const Movie::WiiRuntimeInputRow& destination,
+                                               const Movie::WiiRuntimeInputRow& source,
+                                               const std::set<InputField>& fields) const;
+  Movie::WiiRuntimeInputRow NeutralizeWiiInputFields(const Movie::WiiRuntimeInputRow& row,
+                                                     const std::set<InputField>& fields) const;
   void ClearPendingDrag();
   void BeginPendingDrag();
   void FinishPendingDrag(bool apply_drag);
@@ -97,6 +206,7 @@ private:
   QStackedWidget* m_editor_stack = nullptr;
   QPushButton* m_open_button = nullptr;
   QPushButton* m_save_button = nullptr;
+  QCheckBox* m_select_buttons = nullptr;
   QRubberBand* m_drag_preview = nullptr;
   QTimer* m_refresh_timer = nullptr;
   QTimer* m_drag_hold_timer = nullptr;
@@ -211,6 +321,9 @@ private:
   std::array<bool, 4> m_copied_gc_controllers{};
   std::vector<Movie::WiiRuntimeInputRow> m_copied_wii_rows;
   bool m_copied_wii_classic_only = false;
+  std::set<InputField> m_copied_input_fields;
+  std::set<InputField> m_selected_input_fields;
+  std::vector<QWidget*> m_input_field_widgets;
 
   Movie::WiiRuntimeInputRow m_current_wii_row{};
   WiimoteEmu::DesiredWiimoteState m_current_wii_state{};

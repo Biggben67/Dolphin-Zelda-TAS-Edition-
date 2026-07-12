@@ -7,6 +7,7 @@
 
 #include <array>
 #include <condition_variable>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <queue>
@@ -59,6 +60,8 @@ struct CoreInfo
 class Core final
 {
 public:
+  using VideoFrameCallback = std::function<void(int device_number, u64 ticks)>;
+
   explicit Core(::Core::System& system, int device_number);
   Core(const Core&) = delete;
   Core(Core&&) = delete;
@@ -71,6 +74,10 @@ public:
   void Reset();
   bool IsStarted() const;
   CoreInfo GetCoreInfo() const;
+  static bool GetLatestVideoFrame(int device_number, std::vector<u32>* video_buffer, u32* width,
+                                  u32* height);
+  static u64 AddVideoFrameCallback(VideoFrameCallback callback);
+  static void RemoveVideoFrameCallback(u64 callback_id);
 
   void SetHost(std::weak_ptr<GBAHostInterface> host);
   void SetForceDisconnect(bool force_disconnect);

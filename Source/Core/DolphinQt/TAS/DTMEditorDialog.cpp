@@ -46,6 +46,7 @@
 #include <QTableView>
 #include <QTimer>
 #include <QVBoxLayout>
+#include <QVariant>
 #include <QStringList>
 
 #include "Common/CommonTypes.h"
@@ -1041,6 +1042,7 @@ void DTMEditorDialog::CreateWidgets()
 
   m_open_button = new QPushButton(tr("Open DTM"), this);
   m_save_button = new QPushButton(tr("Save"), this);
+  m_select_buttons = new QCheckBox(tr("Select Buttons"), this);
   m_wii_hide_remote_inputs = new QCheckBox(tr("Hide Remote Inputs"), this);
   connect(m_open_button, &QPushButton::clicked, this, &DTMEditorDialog::PromptOpen);
   connect(m_save_button, &QPushButton::clicked, this, [this] {
@@ -1068,6 +1070,7 @@ void DTMEditorDialog::CreateWidgets()
   auto* button_layout = new QHBoxLayout;
   button_layout->addWidget(m_open_button);
   button_layout->addWidget(m_save_button);
+  button_layout->addWidget(m_select_buttons);
   button_layout->addWidget(m_wii_hide_remote_inputs);
   button_layout->addStretch();
 
@@ -1390,6 +1393,97 @@ void DTMEditorDialog::CreateWidgets()
   {
     connect(box, qOverload<int>(&QSpinBox::valueChanged), this, [this] { ApplyEditorChanges(); });
   }
+  connect(m_select_buttons, &QCheckBox::toggled, this,
+          [this] { UpdateInputFieldSelectionStyles(); });
+  RegisterInputField(m_connected, InputField::GCConnected);
+  RegisterInputField(m_start, InputField::GCStart);
+  RegisterInputField(m_a, InputField::GCA);
+  RegisterInputField(m_b, InputField::GCB);
+  RegisterInputField(m_x, InputField::GCX);
+  RegisterInputField(m_y, InputField::GCY);
+  RegisterInputField(m_z, InputField::GCZ);
+  RegisterInputField(m_l, InputField::GCL);
+  RegisterInputField(m_r, InputField::GCR);
+  RegisterInputField(m_up, InputField::GCUp);
+  RegisterInputField(m_down, InputField::GCDown);
+  RegisterInputField(m_left, InputField::GCLeft);
+  RegisterInputField(m_right, InputField::GCRight);
+  RegisterInputField(m_disc, InputField::GCDisc);
+  RegisterInputField(m_reset, InputField::GCReset);
+  RegisterInputField(m_get_origin, InputField::GCGetOrigin);
+  RegisterInputField(m_trigger_l, InputField::GCTriggerL);
+  RegisterInputField(m_trigger_r, InputField::GCTriggerR);
+  RegisterInputField(m_stick_x, InputField::GCStickX);
+  RegisterInputField(m_stick_y, InputField::GCStickY);
+  RegisterInputField(m_cstick_x, InputField::GCCStickX);
+  RegisterInputField(m_cstick_y, InputField::GCCStickY);
+  RegisterInputField(m_wii_reset, InputField::WiiReset);
+  RegisterInputField(m_wii_a, InputField::WiiA);
+  RegisterInputField(m_wii_b, InputField::WiiB);
+  RegisterInputField(m_wii_one, InputField::WiiOne);
+  RegisterInputField(m_wii_two, InputField::WiiTwo);
+  RegisterInputField(m_wii_plus, InputField::WiiPlus);
+  RegisterInputField(m_wii_minus, InputField::WiiMinus);
+  RegisterInputField(m_wii_home, InputField::WiiHome);
+  RegisterInputField(m_wii_up, InputField::WiiUp);
+  RegisterInputField(m_wii_down, InputField::WiiDown);
+  RegisterInputField(m_wii_left, InputField::WiiLeft);
+  RegisterInputField(m_wii_right, InputField::WiiRight);
+  RegisterInputField(m_wii_accel_x, InputField::WiiAccelX);
+  RegisterInputField(m_wii_accel_y, InputField::WiiAccelY);
+  RegisterInputField(m_wii_accel_z, InputField::WiiAccelZ);
+  RegisterInputField(m_wii_battery, InputField::WiiBattery);
+  const std::array<std::array<InputField, 4>, 4> ir_fields = {{
+      {InputField::WiiIR1Visible, InputField::WiiIR1X, InputField::WiiIR1Y,
+       InputField::WiiIR1Size},
+      {InputField::WiiIR2Visible, InputField::WiiIR2X, InputField::WiiIR2Y,
+       InputField::WiiIR2Size},
+      {InputField::WiiIR3Visible, InputField::WiiIR3X, InputField::WiiIR3Y,
+       InputField::WiiIR3Size},
+      {InputField::WiiIR4Visible, InputField::WiiIR4X, InputField::WiiIR4Y,
+       InputField::WiiIR4Size},
+  }};
+  for (size_t i = 0; i < m_wii_ir_visible.size(); ++i)
+  {
+    RegisterInputField(m_wii_ir_visible[i], ir_fields[i][0]);
+    RegisterInputField(m_wii_ir_x[i], ir_fields[i][1]);
+    RegisterInputField(m_wii_ir_y[i], ir_fields[i][2]);
+    RegisterInputField(m_wii_ir_size[i], ir_fields[i][3]);
+  }
+  RegisterInputField(m_wii_gyro_x, InputField::WiiGyroX);
+  RegisterInputField(m_wii_gyro_y, InputField::WiiGyroY);
+  RegisterInputField(m_wii_gyro_z, InputField::WiiGyroZ);
+  RegisterInputField(m_wii_gyro_slow_x, InputField::WiiGyroSlowX);
+  RegisterInputField(m_wii_gyro_slow_y, InputField::WiiGyroSlowY);
+  RegisterInputField(m_wii_gyro_slow_z, InputField::WiiGyroSlowZ);
+  RegisterInputField(m_wii_c, InputField::WiiNunchukC);
+  RegisterInputField(m_wii_z, InputField::WiiNunchukZ);
+  RegisterInputField(m_wii_nunchuk_x, InputField::WiiNunchukStickX);
+  RegisterInputField(m_wii_nunchuk_y, InputField::WiiNunchukStickY);
+  RegisterInputField(m_wii_nunchuk_accel_x, InputField::WiiNunchukAccelX);
+  RegisterInputField(m_wii_nunchuk_accel_y, InputField::WiiNunchukAccelY);
+  RegisterInputField(m_wii_nunchuk_accel_z, InputField::WiiNunchukAccelZ);
+  RegisterInputField(m_wii_classic_a, InputField::WiiClassicA);
+  RegisterInputField(m_wii_classic_b, InputField::WiiClassicB);
+  RegisterInputField(m_wii_classic_x, InputField::WiiClassicX);
+  RegisterInputField(m_wii_classic_y, InputField::WiiClassicY);
+  RegisterInputField(m_wii_classic_zl, InputField::WiiClassicZL);
+  RegisterInputField(m_wii_classic_zr, InputField::WiiClassicZR);
+  RegisterInputField(m_wii_classic_l, InputField::WiiClassicL);
+  RegisterInputField(m_wii_classic_r, InputField::WiiClassicR);
+  RegisterInputField(m_wii_classic_minus, InputField::WiiClassicMinus);
+  RegisterInputField(m_wii_classic_plus, InputField::WiiClassicPlus);
+  RegisterInputField(m_wii_classic_home, InputField::WiiClassicHome);
+  RegisterInputField(m_wii_classic_up, InputField::WiiClassicUp);
+  RegisterInputField(m_wii_classic_down, InputField::WiiClassicDown);
+  RegisterInputField(m_wii_classic_left, InputField::WiiClassicLeft);
+  RegisterInputField(m_wii_classic_right, InputField::WiiClassicRight);
+  RegisterInputField(m_wii_classic_left_x, InputField::WiiClassicLeftX);
+  RegisterInputField(m_wii_classic_left_y, InputField::WiiClassicLeftY);
+  RegisterInputField(m_wii_classic_right_x, InputField::WiiClassicRightX);
+  RegisterInputField(m_wii_classic_right_y, InputField::WiiClassicRightY);
+  RegisterInputField(m_wii_classic_l_trigger, InputField::WiiClassicTriggerL);
+  RegisterInputField(m_wii_classic_r_trigger, InputField::WiiClassicTriggerR);
   connect(m_wii_hide_remote_inputs, &QCheckBox::toggled, this, [this](bool hide) {
     m_wii_battery_label->setVisible(!hide);
     m_wii_battery->setVisible(!hide);
@@ -2405,11 +2499,339 @@ void DTMEditorDialog::RefreshEditedRows(const std::vector<int>& rows)
   m_table->update();
 }
 
+void DTMEditorDialog::RegisterInputField(QWidget* widget, const InputField field)
+{
+  if (!widget)
+    return;
+
+  const int value = static_cast<int>(field);
+  widget->setProperty("dtm_input_field", value);
+  widget->installEventFilter(this);
+  m_input_field_widgets.push_back(widget);
+  for (QWidget* child : widget->findChildren<QWidget*>())
+  {
+    child->setProperty("dtm_input_field", value);
+    child->installEventFilter(this);
+  }
+}
+
+void DTMEditorDialog::ToggleSelectedInputField(const InputField field)
+{
+  if (m_selected_input_fields.contains(field))
+    m_selected_input_fields.erase(field);
+  else
+    m_selected_input_fields.insert(field);
+  UpdateInputFieldSelectionStyles();
+  UpdateStatusLabel();
+}
+
+bool DTMEditorDialog::IsInputFieldFilterActive() const
+{
+  return m_select_buttons && m_select_buttons->isChecked() && !m_selected_input_fields.empty();
+}
+
+std::set<DTMEditorDialog::InputField> DTMEditorDialog::ActiveInputFieldFilter() const
+{
+  return IsInputFieldFilterActive() ? m_selected_input_fields : std::set<InputField>{};
+}
+
+void DTMEditorDialog::UpdateInputFieldSelectionStyles()
+{
+  const bool selecting = m_select_buttons && m_select_buttons->isChecked();
+  for (QWidget* widget : m_input_field_widgets)
+  {
+    if (!widget)
+      continue;
+
+    if (!selecting)
+    {
+      widget->setStyleSheet(QString());
+      continue;
+    }
+
+    const QVariant field_value = widget->property("dtm_input_field");
+    const bool selected =
+        field_value.isValid() &&
+        m_selected_input_fields.contains(static_cast<InputField>(field_value.toInt()));
+    widget->setStyleSheet(selected ? QStringLiteral("background-color: rgba(80, 160, 255, 70);") :
+                                     QStringLiteral("color: palette(mid);"));
+  }
+}
+
+Movie::ControllerState DTMEditorDialog::CopyGCInputFields(
+    const Movie::ControllerState& destination, const Movie::ControllerState& source,
+    const std::set<InputField>& fields) const
+{
+  if (fields.empty())
+    return source;
+
+  Movie::ControllerState updated = destination;
+  const auto has = [&fields](InputField field) { return fields.contains(field); };
+  if (has(InputField::GCConnected))
+    updated.is_connected = source.is_connected;
+  if (has(InputField::GCStart))
+    updated.Start = source.Start;
+  if (has(InputField::GCA))
+    updated.A = source.A;
+  if (has(InputField::GCB))
+    updated.B = source.B;
+  if (has(InputField::GCX))
+    updated.X = source.X;
+  if (has(InputField::GCY))
+    updated.Y = source.Y;
+  if (has(InputField::GCZ))
+    updated.Z = source.Z;
+  if (has(InputField::GCL))
+    updated.L = source.L;
+  if (has(InputField::GCR))
+    updated.R = source.R;
+  if (has(InputField::GCUp))
+    updated.DPadUp = source.DPadUp;
+  if (has(InputField::GCDown))
+    updated.DPadDown = source.DPadDown;
+  if (has(InputField::GCLeft))
+    updated.DPadLeft = source.DPadLeft;
+  if (has(InputField::GCRight))
+    updated.DPadRight = source.DPadRight;
+  if (has(InputField::GCDisc))
+    updated.disc = source.disc;
+  if (has(InputField::GCReset))
+    updated.reset = source.reset;
+  if (has(InputField::GCGetOrigin))
+    updated.get_origin = source.get_origin;
+  if (has(InputField::GCTriggerL))
+    updated.TriggerL = source.TriggerL;
+  if (has(InputField::GCTriggerR))
+    updated.TriggerR = source.TriggerR;
+  if (has(InputField::GCStickX))
+    updated.AnalogStickX = source.AnalogStickX;
+  if (has(InputField::GCStickY))
+    updated.AnalogStickY = source.AnalogStickY;
+  if (has(InputField::GCCStickX))
+    updated.CStickX = source.CStickX;
+  if (has(InputField::GCCStickY))
+    updated.CStickY = source.CStickY;
+  return updated;
+}
+
+Movie::ControllerState DTMEditorDialog::NeutralizeGCInputFields(
+    const Movie::ControllerState& state, const std::set<InputField>& fields) const
+{
+  return CopyGCInputFields(state, MakeNeutralGCStateLike(state), fields);
+}
+
+Movie::WiiRuntimeInputRow DTMEditorDialog::CopyWiiInputFields(
+    const Movie::WiiRuntimeInputRow& destination, const Movie::WiiRuntimeInputRow& source,
+    const std::set<InputField>& fields) const
+{
+  if (fields.empty())
+    return source;
+
+  const auto has = [&fields](InputField field) { return fields.contains(field); };
+  Movie::WiiRuntimeInputRow updated = destination;
+  if (has(InputField::WiiReset))
+  {
+    updated.is_reset = source.is_reset;
+    if (source.is_reset)
+    {
+      updated.serialized_state = {};
+      return updated;
+    }
+    if (!HasValidWiiSerializedState(updated))
+      updated.serialized_state = source.serialized_state;
+  }
+
+  if (updated.is_reset || source.is_reset || !HasValidWiiSerializedState(updated) ||
+      !HasValidWiiSerializedState(source))
+  {
+    return updated;
+  }
+
+  WiimoteEmu::DesiredWiimoteState destination_state;
+  WiimoteEmu::DesiredWiimoteState source_state;
+  if (!WiimoteEmu::DeserializeDesiredState(&destination_state, updated.serialized_state) ||
+      !WiimoteEmu::DeserializeDesiredState(&source_state, source.serialized_state))
+  {
+    return destination;
+  }
+
+  if (has(InputField::WiiA))
+    destination_state.buttons.a = source_state.buttons.a;
+  if (has(InputField::WiiB))
+    destination_state.buttons.b = source_state.buttons.b;
+  if (has(InputField::WiiOne))
+    destination_state.buttons.one = source_state.buttons.one;
+  if (has(InputField::WiiTwo))
+    destination_state.buttons.two = source_state.buttons.two;
+  if (has(InputField::WiiPlus))
+    destination_state.buttons.plus = source_state.buttons.plus;
+  if (has(InputField::WiiMinus))
+    destination_state.buttons.minus = source_state.buttons.minus;
+  if (has(InputField::WiiHome))
+    destination_state.buttons.home = source_state.buttons.home;
+  if (has(InputField::WiiUp))
+    destination_state.buttons.up = source_state.buttons.up;
+  if (has(InputField::WiiDown))
+    destination_state.buttons.down = source_state.buttons.down;
+  if (has(InputField::WiiLeft))
+    destination_state.buttons.left = source_state.buttons.left;
+  if (has(InputField::WiiRight))
+    destination_state.buttons.right = source_state.buttons.right;
+  if (has(InputField::WiiAccelX))
+    destination_state.acceleration.value.x = source_state.acceleration.value.x;
+  if (has(InputField::WiiAccelY))
+    destination_state.acceleration.value.y = source_state.acceleration.value.y;
+  if (has(InputField::WiiAccelZ))
+    destination_state.acceleration.value.z = source_state.acceleration.value.z;
+  if (has(InputField::WiiBattery))
+    destination_state.battery = source_state.battery;
+
+  const std::array<std::array<InputField, 4>, 4> ir_fields = {{
+      {InputField::WiiIR1Visible, InputField::WiiIR1X, InputField::WiiIR1Y,
+       InputField::WiiIR1Size},
+      {InputField::WiiIR2Visible, InputField::WiiIR2X, InputField::WiiIR2Y,
+       InputField::WiiIR2Size},
+      {InputField::WiiIR3Visible, InputField::WiiIR3X, InputField::WiiIR3Y,
+       InputField::WiiIR3Size},
+      {InputField::WiiIR4Visible, InputField::WiiIR4X, InputField::WiiIR4Y,
+       InputField::WiiIR4Size},
+  }};
+  for (size_t i = 0; i < destination_state.camera_points.size(); ++i)
+  {
+    WiimoteEmu::CameraPoint point = destination_state.camera_points[i];
+    if (has(ir_fields[i][0]))
+    {
+      point = source_state.camera_points[i];
+      destination_state.camera_points[i] = point;
+      continue;
+    }
+
+    if (IsVisibleIRPoint(point))
+    {
+      if (has(ir_fields[i][1]))
+        point.position.x = source_state.camera_points[i].position.x;
+      if (has(ir_fields[i][2]))
+        point.position.y = source_state.camera_points[i].position.y;
+      if (has(ir_fields[i][3]))
+        point.size = source_state.camera_points[i].size;
+    }
+    destination_state.camera_points[i] = point;
+  }
+
+  if (destination_state.motion_plus.has_value() && source_state.motion_plus.has_value())
+  {
+    if (has(InputField::WiiGyroX))
+      destination_state.motion_plus->gyro.value.x = source_state.motion_plus->gyro.value.x;
+    if (has(InputField::WiiGyroY))
+      destination_state.motion_plus->gyro.value.y = source_state.motion_plus->gyro.value.y;
+    if (has(InputField::WiiGyroZ))
+      destination_state.motion_plus->gyro.value.z = source_state.motion_plus->gyro.value.z;
+    if (has(InputField::WiiGyroSlowX))
+      destination_state.motion_plus->is_slow.x = source_state.motion_plus->is_slow.x;
+    if (has(InputField::WiiGyroSlowY))
+      destination_state.motion_plus->is_slow.y = source_state.motion_plus->is_slow.y;
+    if (has(InputField::WiiGyroSlowZ))
+      destination_state.motion_plus->is_slow.z = source_state.motion_plus->is_slow.z;
+  }
+
+  if (std::holds_alternative<WiimoteEmu::Nunchuk::DataFormat>(destination_state.extension.data) &&
+      std::holds_alternative<WiimoteEmu::Nunchuk::DataFormat>(source_state.extension.data))
+  {
+    auto destination_nunchuk =
+        std::get<WiimoteEmu::Nunchuk::DataFormat>(destination_state.extension.data);
+    const auto& source_nunchuk =
+        std::get<WiimoteEmu::Nunchuk::DataFormat>(source_state.extension.data);
+    u8 buttons = destination_nunchuk.GetButtons();
+    if (has(InputField::WiiNunchukC))
+      buttons = source_nunchuk.GetButtons() & WiimoteEmu::Nunchuk::BUTTON_C ?
+                    buttons | WiimoteEmu::Nunchuk::BUTTON_C :
+                    buttons & ~WiimoteEmu::Nunchuk::BUTTON_C;
+    if (has(InputField::WiiNunchukZ))
+      buttons = source_nunchuk.GetButtons() & WiimoteEmu::Nunchuk::BUTTON_Z ?
+                    buttons | WiimoteEmu::Nunchuk::BUTTON_Z :
+                    buttons & ~WiimoteEmu::Nunchuk::BUTTON_Z;
+    destination_nunchuk.SetButtons(buttons);
+    if (has(InputField::WiiNunchukStickX))
+      destination_nunchuk.jx = source_nunchuk.GetStick().value.x;
+    if (has(InputField::WiiNunchukStickY))
+      destination_nunchuk.jy = source_nunchuk.GetStick().value.y;
+    if (has(InputField::WiiNunchukAccelX))
+      destination_nunchuk.SetAccelX(source_nunchuk.GetAccel().value.x);
+    if (has(InputField::WiiNunchukAccelY))
+      destination_nunchuk.SetAccelY(source_nunchuk.GetAccel().value.y);
+    if (has(InputField::WiiNunchukAccelZ))
+      destination_nunchuk.SetAccelZ(source_nunchuk.GetAccel().value.z);
+    destination_state.extension.data = destination_nunchuk;
+  }
+  else if (std::holds_alternative<WiimoteEmu::Classic::DataFormat>(
+               destination_state.extension.data) &&
+           std::holds_alternative<WiimoteEmu::Classic::DataFormat>(source_state.extension.data))
+  {
+    auto destination_classic =
+        std::get<WiimoteEmu::Classic::DataFormat>(destination_state.extension.data);
+    const auto& source_classic =
+        std::get<WiimoteEmu::Classic::DataFormat>(source_state.extension.data);
+    u16 buttons = destination_classic.GetButtons();
+    const auto copy_classic_button = [&](InputField field, u16 bit) {
+      if (!has(field))
+        return;
+      buttons = source_classic.GetButtons() & bit ? buttons | bit : buttons & ~bit;
+    };
+    copy_classic_button(InputField::WiiClassicA, WiimoteEmu::Classic::BUTTON_A);
+    copy_classic_button(InputField::WiiClassicB, WiimoteEmu::Classic::BUTTON_B);
+    copy_classic_button(InputField::WiiClassicX, WiimoteEmu::Classic::BUTTON_X);
+    copy_classic_button(InputField::WiiClassicY, WiimoteEmu::Classic::BUTTON_Y);
+    copy_classic_button(InputField::WiiClassicZL, WiimoteEmu::Classic::BUTTON_ZL);
+    copy_classic_button(InputField::WiiClassicZR, WiimoteEmu::Classic::BUTTON_ZR);
+    copy_classic_button(InputField::WiiClassicL, WiimoteEmu::Classic::TRIGGER_L);
+    copy_classic_button(InputField::WiiClassicR, WiimoteEmu::Classic::TRIGGER_R);
+    copy_classic_button(InputField::WiiClassicMinus, WiimoteEmu::Classic::BUTTON_MINUS);
+    copy_classic_button(InputField::WiiClassicPlus, WiimoteEmu::Classic::BUTTON_PLUS);
+    copy_classic_button(InputField::WiiClassicHome, WiimoteEmu::Classic::BUTTON_HOME);
+    copy_classic_button(InputField::WiiClassicUp, WiimoteEmu::Classic::PAD_UP);
+    copy_classic_button(InputField::WiiClassicDown, WiimoteEmu::Classic::PAD_DOWN);
+    copy_classic_button(InputField::WiiClassicLeft, WiimoteEmu::Classic::PAD_LEFT);
+    copy_classic_button(InputField::WiiClassicRight, WiimoteEmu::Classic::PAD_RIGHT);
+    destination_classic.SetButtons(buttons);
+    auto left_stick = destination_classic.GetLeftStick().value;
+    auto right_stick = destination_classic.GetRightStick().value;
+    if (has(InputField::WiiClassicLeftX))
+      left_stick.x = source_classic.GetLeftStick().value.x;
+    if (has(InputField::WiiClassicLeftY))
+      left_stick.y = source_classic.GetLeftStick().value.y;
+    if (has(InputField::WiiClassicRightX))
+      right_stick.x = source_classic.GetRightStick().value.x;
+    if (has(InputField::WiiClassicRightY))
+      right_stick.y = source_classic.GetRightStick().value.y;
+    destination_classic.SetLeftStick(left_stick);
+    destination_classic.SetRightStick(right_stick);
+    if (has(InputField::WiiClassicTriggerL))
+      destination_classic.SetLeftTrigger(source_classic.GetLeftTrigger().value);
+    if (has(InputField::WiiClassicTriggerR))
+      destination_classic.SetRightTrigger(source_classic.GetRightTrigger().value);
+    destination_state.extension.data = destination_classic;
+  }
+
+  updated.serialized_state = WiimoteEmu::SerializeDesiredState(destination_state);
+  return updated;
+}
+
+Movie::WiiRuntimeInputRow DTMEditorDialog::NeutralizeWiiInputFields(
+    const Movie::WiiRuntimeInputRow& row, const std::set<InputField>& fields) const
+{
+  return CopyWiiInputFields(row, MakeNeutralWiiRowLike(row), fields);
+}
+
 void DTMEditorDialog::CopySelectedInputs()
 {
+  if (m_select_buttons && m_select_buttons->isChecked() && m_selected_input_fields.empty())
+    return;
+
   const std::vector<InputCell> cells = GetSelectedInputCells();
   if (cells.empty())
     return;
+
+  m_copied_input_fields = ActiveInputFieldFilter();
 
   if (m_model->GetKind() == ModelMovieKind::GC)
   {
@@ -2467,8 +2889,8 @@ void DTMEditorDialog::CopySelectedInputs()
     m_copied_gc_rows.clear();
     m_copied_gc_cells.clear();
     m_copied_gc_controllers = {};
-    m_copied_wii_classic_only =
-        m_wii_hide_remote_inputs && m_wii_hide_remote_inputs->isChecked();
+    m_copied_wii_classic_only = m_copied_input_fields.empty() && m_wii_hide_remote_inputs &&
+                                m_wii_hide_remote_inputs->isChecked();
     m_copied_movie_kind = EditorMovieKind::Wii;
   }
   else
@@ -2544,12 +2966,19 @@ bool DTMEditorDialog::PasteCopiedInputs(int start_row)
 
         if (m_using_runtime_movie && m_runtime_movie_kind == EditorMovieKind::GC &&
             !movie.SetGCRuntimeFrameState(
-                row, controller, copied_row[static_cast<size_t>(source_controller)]))
+                row, controller,
+                CopyGCInputFields(m_model->GetGCState(row, controller),
+                                  copied_row[static_cast<size_t>(source_controller)],
+                                  m_copied_input_fields)))
         {
           continue;
         }
 
-        m_model->SetGCState(row, controller, copied_row[static_cast<size_t>(source_controller)]);
+        m_model->SetGCState(
+            row, controller,
+            CopyGCInputFields(m_model->GetGCState(row, controller),
+                              copied_row[static_cast<size_t>(source_controller)],
+                              m_copied_input_fields));
         for (int candidate = 1; candidate < m_model->columnCount(); ++candidate)
         {
           int mapped = -1;
@@ -2576,6 +3005,8 @@ bool DTMEditorDialog::PasteCopiedInputs(int start_row)
       const auto& copied_row = m_copied_wii_rows[static_cast<size_t>(i)];
       const Movie::WiiRuntimeInputRow current_row = m_model->GetWiiRow(row);
       const Movie::WiiRuntimeInputRow pasted_row =
+          !m_copied_input_fields.empty() ?
+              CopyWiiInputFields(current_row, copied_row, m_copied_input_fields) :
           classic_only ? CopyClassicWiiInputOnly(current_row, copied_row).value_or(current_row) :
                          copied_row;
       if (classic_only && WiiRowsEqual(pasted_row, current_row))
@@ -2740,6 +3171,27 @@ void DTMEditorDialog::UpdateDragPreview()
 
 bool DTMEditorDialog::eventFilter(QObject* watched, QEvent* event)
 {
+  if (m_select_buttons && m_select_buttons->isChecked())
+  {
+    const QVariant field_value = watched->property("dtm_input_field");
+    if (field_value.isValid())
+    {
+      if (event->type() == QEvent::MouseButtonPress)
+      {
+        auto* mouse_event = static_cast<QMouseEvent*>(event);
+        if (mouse_event->button() == Qt::LeftButton)
+          ToggleSelectedInputField(static_cast<InputField>(field_value.toInt()));
+        return true;
+      }
+
+      if (event->type() == QEvent::MouseButtonRelease ||
+          event->type() == QEvent::MouseButtonDblClick)
+      {
+        return true;
+      }
+    }
+  }
+
   if (watched == m_table->viewport())
   {
     switch (event->type())
@@ -2851,6 +3303,9 @@ bool DTMEditorDialog::MoveSelectedInputs(const std::vector<InputCell>& selected_
 {
   if (selected_cells.empty() || m_model->GetKind() == ModelMovieKind::None)
     return false;
+  if (m_select_buttons && m_select_buttons->isChecked() && m_selected_input_fields.empty())
+    return false;
+  const std::set<InputField> moved_fields = ActiveInputFieldFilter();
 
   std::vector<InputCell> cells = selected_cells;
   cells.erase(std::remove_if(cells.begin(), cells.end(), [this](const InputCell& cell) {
@@ -2963,14 +3418,21 @@ bool DTMEditorDialog::MoveSelectedInputs(const std::vector<InputCell>& selected_
 
       auto& updated_row = updated[changed_index(move.source_row)];
       updated_row[static_cast<size_t>(move.controller)] =
-          MakeNeutralGCStateLike(
-              original[changed_index(move.source_row)][static_cast<size_t>(move.controller)]);
+          moved_fields.empty() ?
+              MakeNeutralGCStateLike(
+                  original[changed_index(move.source_row)][static_cast<size_t>(move.controller)]) :
+              NeutralizeGCInputFields(
+                  original[changed_index(move.source_row)][static_cast<size_t>(move.controller)],
+                  moved_fields);
     }
 
     for (const GCCellMove& move : cell_moves)
     {
       updated[changed_index(move.dest_row)][static_cast<size_t>(move.controller)] =
-          original[changed_index(move.source_row)][static_cast<size_t>(move.controller)];
+          CopyGCInputFields(
+              updated[changed_index(move.dest_row)][static_cast<size_t>(move.controller)],
+              original[changed_index(move.source_row)][static_cast<size_t>(move.controller)],
+              moved_fields);
     }
 
     for (size_t i = 0; i < changed_rows.size(); ++i)
@@ -2999,22 +3461,27 @@ bool DTMEditorDialog::MoveSelectedInputs(const std::vector<InputCell>& selected_
     for (const int row : changed_rows)
       original.push_back(m_model->GetWiiRow(row));
     auto updated = original;
-    const bool classic_only = m_wii_hide_remote_inputs && m_wii_hide_remote_inputs->isChecked();
+    const bool classic_only =
+        moved_fields.empty() && m_wii_hide_remote_inputs && m_wii_hide_remote_inputs->isChecked();
 
     for (const int row : rows)
     {
       if (is_dest_row(row))
         continue;
-      updated[changed_index(row)] = classic_only ?
-                                        MakeNeutralClassicWiiRowLike(original[changed_index(row)]) :
-                                        MakeNeutralWiiRowLike(original[changed_index(row)]);
+      updated[changed_index(row)] =
+          !moved_fields.empty() ? NeutralizeWiiInputFields(original[changed_index(row)], moved_fields) :
+          classic_only          ? MakeNeutralClassicWiiRowLike(original[changed_index(row)]) :
+                                  MakeNeutralWiiRowLike(original[changed_index(row)]);
     }
 
     for (size_t i = 0; i < rows.size(); ++i)
     {
       updated[changed_index(dest_rows[i])] =
+          !moved_fields.empty() ?
+              CopyWiiInputFields(updated[changed_index(dest_rows[i])],
+                                 original[changed_index(rows[i])], moved_fields) :
           classic_only ? CopyClassicWiiInputOnly(updated[changed_index(dest_rows[i])],
-                                                original[changed_index(rows[i])])
+                                                 original[changed_index(rows[i])])
                              .value_or(updated[changed_index(dest_rows[i])]) :
                          original[changed_index(rows[i])];
     }
@@ -3367,6 +3834,7 @@ void DTMEditorDialog::ApplyEditorChanges()
 void DTMEditorDialog::SetEditorEnabled(bool enabled)
 {
   m_editor_box->setEnabled(enabled);
+  UpdateInputFieldSelectionStyles();
 }
 
 Movie::ControllerState DTMEditorDialog::BuildGCStateFromEditor() const

@@ -40,7 +40,7 @@ add_library(scripting
   Python/Utils/object_wrapper.h
 )
 
-find_package(Python3 REQUIRED COMPONENTS Development Interpreter)
+find_package(Python3 3.10 REQUIRED COMPONENTS Development Interpreter)
 
 get_filename_component(DOLPHIN_PYTHON_HOME "${Python3_EXECUTABLE}" DIRECTORY)
 set(DOLPHIN_PYTHON_DLLS "${DOLPHIN_PYTHON_HOME}/DLLs")

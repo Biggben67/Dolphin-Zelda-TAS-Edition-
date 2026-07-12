@@ -527,6 +527,9 @@ const Info<bool> MAIN_MOVIE_USE_LEGACY_INPUT_DISPLAY{{System::Main, "Movie",
                                                      false};
 const Info<bool> MAIN_MOVIE_TURBO_VISUALIZER{{System::Main, "Movie", "TurboVisualizer"},
                                              false};
+const Info<int> MAIN_MOVIE_INPUT_DISPLAY_VISUAL_DELAY{{System::Main, "Movie",
+                                                       "InputDisplayVisualDelay"},
+                                                      3};
 const Info<u32> MAIN_MOVIE_LEGACY_INPUT_DISPLAY_COLOR{{System::Main, "Movie",
                                                        "LegacyInputDisplayColor"},
                                                       0x00ffff};

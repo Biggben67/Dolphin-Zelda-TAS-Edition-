@@ -10,6 +10,7 @@
 #include <string>
 
 #include <QCheckBox>
+#include <QApplication>
 #include <QGridLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
@@ -43,6 +44,7 @@
 #include "DolphinQt/TAS/IRWidget.h"
 #include "DolphinQt/TAS/StickWidget.h"
 #include "DolphinQt/TAS/TASCheckBox.h"
+#include "DolphinQt/TAS/TASSlider.h"
 #include "DolphinQt/TAS/TASSpinBox.h"
 
 #include "InputCommon/ControllerEmu/ControlGroup/Attachments.h"
@@ -79,6 +81,7 @@ constexpr double k_gyro_stretch =
     WiimoteEmu::MotionPlus::CALIBRATION_SLOW_SCALE_DEGREES;
 
 constexpr const char* SECTION_WII_IR = "Wii.IR";
+constexpr const char* SECTION_WII_IR_DATA = "Wii.IRData";
 constexpr const char* SECTION_WII_NUNCHUK_STICK = "Wii.NunchukStick";
 constexpr const char* SECTION_WII_CLASSIC_LEFT_STICK = "Wii.ClassicLeftStick";
 constexpr const char* SECTION_WII_CLASSIC_RIGHT_STICK = "Wii.ClassicRightStick";
@@ -91,6 +94,21 @@ constexpr const char* SECTION_WII_SETTINGS = "Wii.Settings";
 constexpr const char* SECTION_WII_BATTERY = "Wii.Battery";
 constexpr const char* SECTION_WII_RESET = "Wii.Reset";
 constexpr const char* SECTION_WII_FAVORITE_SCRIPTS = "Wii.FavoriteScripts";
+constexpr int IR_ROTATION_MIN = -180;
+constexpr int IR_ROTATION_MAX = 180;
+constexpr int IR_DISTANCE_MIN_CM = 50;
+constexpr int IR_DISTANCE_MAX_CM = 500;
+constexpr int IR_DISTANCE_DEFAULT_CM = 200;
+
+struct IRDisplayData
+{
+  int x = IRWidget::IR_MAX_X / 2;
+  int y = IRWidget::IR_MAX_Y / 2;
+  int rotation_degrees = 0;
+  int distance_cm = IR_DISTANCE_DEFAULT_CM;
+  int visible_points = 0;
+  bool has_geometry = false;
+};
 
 int GyroRawToTasValue(u16 raw_value)
 {
@@ -100,6 +118,66 @@ int GyroRawToTasValue(u16 raw_value)
 bool IsVisibleIRPoint(const WiimoteEmu::CameraPoint& point)
 {
   return point.position.x != 0xffff && point.position.y != 0xffff;
+}
+
+IRDisplayData CalculateIRDisplayData(
+    const std::array<WiimoteEmu::CameraPoint, WiimoteEmu::CameraLogic::NUM_POINTS>& points)
+{
+  IRDisplayData data;
+
+  int first_visible = -1;
+  int second_visible = -1;
+  int total_x = 0;
+  int total_y = 0;
+  for (int i = 0; i < static_cast<int>(points.size()); ++i)
+  {
+    if (!IsVisibleIRPoint(points[i]))
+      continue;
+
+    if (first_visible < 0)
+      first_visible = i;
+    else if (second_visible < 0)
+      second_visible = i;
+
+    total_x += points[i].position.x;
+    total_y += points[i].position.y;
+    ++data.visible_points;
+  }
+
+  if (data.visible_points == 0)
+    return data;
+
+  data.x = std::clamp(static_cast<int>(std::lround(static_cast<double>(total_x) /
+                                                  data.visible_points)),
+                      static_cast<int>(IRWidget::IR_MIN_X), static_cast<int>(IRWidget::IR_MAX_X));
+  data.y = std::clamp(static_cast<int>(std::lround(static_cast<double>(total_y) /
+                                                  data.visible_points)),
+                      static_cast<int>(IRWidget::IR_MIN_Y), static_cast<int>(IRWidget::IR_MAX_Y));
+  data.y = IRWidget::IR_MAX_Y - data.y;
+
+  if (first_visible < 0 || second_visible < 0)
+    return data;
+
+  const auto& first = points[first_visible].position;
+  const auto& second = points[second_visible].position;
+  const double dx = static_cast<double>(second.x) - first.x;
+  const double dy = static_cast<double>(second.y) - first.y;
+  const double separation = std::hypot(dx, dy);
+  if (separation < 0.001)
+    return data;
+
+  data.rotation_degrees =
+      std::clamp(static_cast<int>(std::lround(std::atan2(dy, dx) * 360.0 / MathUtil::TAU)),
+                 IR_ROTATION_MIN, IR_ROTATION_MAX);
+
+  const double distance_meters =
+      WiimoteEmu::CameraLogic::SENSOR_BAR_LED_SEPARATION *
+      WiimoteEmu::CameraLogic::CAMERA_RES_X /
+      (2.0 * std::tan(WiimoteEmu::CameraLogic::CAMERA_FOV_X / 2.0) * separation);
+  data.distance_cm = std::clamp(static_cast<int>(std::lround(distance_meters * 100.0)),
+                                IR_DISTANCE_MIN_CM, IR_DISTANCE_MAX_CM);
+  data.has_geometry = true;
+  return data;
 }
 }  // namespace
 
@@ -170,19 +248,76 @@ WiiTASInputWindow::WiiTASInputWindow(QWidget* parent, int num) : TASInputWindow(
   m_wiimote_overrider.AddFunction(WiimoteEmu::Wiimote::IR_GROUP,
                                   WiimoteEmu::Wiimote::IR_INSTANT_POINT_OVERRIDE,
                                   [this](ControlState) -> std::optional<ControlState> {
-                                    return m_ir_instant_point->isChecked() ? 1.0 : 0.0;
+                                    return (m_ir_instant_point->isChecked() ||
+                                            IsCustomIRDataActive()) ?
+                                               1.0 :
+                                               0.0;
+                                  });
+  m_wiimote_overrider.AddFunction(WiimoteEmu::Wiimote::IR_GROUP,
+                                  WiimoteEmu::Wiimote::IR_RAW_X_OVERRIDE,
+                                  [this](ControlState) -> std::optional<ControlState> {
+                                    if (m_ir_offscreen->isChecked())
+                                      return std::numeric_limits<ControlState>::quiet_NaN();
+                                    return std::nullopt;
+                                  });
+  m_wiimote_overrider.AddFunction(WiimoteEmu::Wiimote::IR_GROUP,
+                                  WiimoteEmu::Wiimote::IR_RAW_Y_OVERRIDE,
+                                  [this](ControlState) -> std::optional<ControlState> {
+                                    if (m_ir_offscreen->isChecked())
+                                      return std::numeric_limits<ControlState>::quiet_NaN();
+                                    return std::nullopt;
                                   });
 
-  auto* visual = new IRWidget(this);
-  visual->SetX(ir_x_center);
-  visual->SetY(ir_y_center);
+  m_ir_data_box = new QGroupBox(tr("IR Data"));
+  m_ir_rotation_value = new TASSpinBox(m_ir_data_box);
+  m_ir_rotation_value->setRange(IR_ROTATION_MIN, IR_ROTATION_MAX);
+  m_ir_rotation_value->setValue(0);
+  auto* ir_rotation_slider = new TASSlider(0, Qt::Horizontal, m_ir_data_box);
+  ir_rotation_slider->setRange(IR_ROTATION_MIN, IR_ROTATION_MAX);
+  ir_rotation_slider->setValue(0);
+  connect(ir_rotation_slider, &QSlider::valueChanged, m_ir_rotation_value, &QSpinBox::setValue);
+  connect(m_ir_rotation_value, &QSpinBox::valueChanged, ir_rotation_slider, &QSlider::setValue);
 
-  connect(m_ir_x_value, &QSpinBox::valueChanged, visual, &IRWidget::SetX);
-  connect(m_ir_y_value, &QSpinBox::valueChanged, visual, &IRWidget::SetY);
-  connect(visual, &IRWidget::ChangedX, m_ir_x_value, &QSpinBox::setValue);
-  connect(visual, &IRWidget::ChangedY, m_ir_y_value, &QSpinBox::setValue);
+  m_ir_distance_value = new TASSpinBox(m_ir_data_box);
+  m_ir_distance_value->setRange(IR_DISTANCE_MIN_CM, IR_DISTANCE_MAX_CM);
+  m_ir_distance_value->setValue(IR_DISTANCE_DEFAULT_CM);
+  auto* ir_distance_slider =
+      new TASSlider(IR_DISTANCE_DEFAULT_CM, Qt::Horizontal, m_ir_data_box);
+  ir_distance_slider->setRange(IR_DISTANCE_MIN_CM, IR_DISTANCE_MAX_CM);
+  ir_distance_slider->setValue(IR_DISTANCE_DEFAULT_CM);
+  connect(ir_distance_slider, &QSlider::valueChanged, m_ir_distance_value, &QSpinBox::setValue);
+  connect(m_ir_distance_value, &QSpinBox::valueChanged, ir_distance_slider, &QSlider::setValue);
 
-  auto* visual_ar = new AspectRatioWidget(visual, IRWidget::IR_MAX_X, IRWidget::IR_MAX_Y);
+  auto* ir_data_layout = new QGridLayout;
+  ir_data_layout->addWidget(new QLabel(tr("Rotation (deg)"), m_ir_data_box), 0, 0);
+  ir_data_layout->addWidget(ir_rotation_slider, 0, 1);
+  ir_data_layout->addWidget(m_ir_rotation_value, 0, 2);
+  ir_data_layout->addWidget(new QLabel(tr("Distance (cm)"), m_ir_data_box), 1, 0);
+  ir_data_layout->addWidget(ir_distance_slider, 1, 1);
+  ir_data_layout->addWidget(m_ir_distance_value, 1, 2);
+  m_ir_data_box->setLayout(ir_data_layout);
+
+  m_wiimote_overrider.AddFunction(
+      WiimoteEmu::Wiimote::IR_GROUP, WiimoteEmu::Wiimote::IR_ROTATION_OVERRIDE,
+      [this](ControlState) -> std::optional<ControlState> {
+        return static_cast<ControlState>(m_ir_rotation_value->GetValue());
+      });
+  m_wiimote_overrider.AddFunction(
+      WiimoteEmu::Wiimote::IR_GROUP, WiimoteEmu::Wiimote::IR_DISTANCE_OVERRIDE,
+      [this](ControlState) -> std::optional<ControlState> {
+        return static_cast<ControlState>(m_ir_distance_value->GetValue()) / 100.0;
+      });
+
+  m_ir_widget = new IRWidget(this);
+  m_ir_widget->SetX(ir_x_center);
+  m_ir_widget->SetY(ir_y_center);
+
+  connect(m_ir_x_value, &QSpinBox::valueChanged, m_ir_widget, &IRWidget::SetX);
+  connect(m_ir_y_value, &QSpinBox::valueChanged, m_ir_widget, &IRWidget::SetY);
+  connect(m_ir_widget, &IRWidget::ChangedX, m_ir_x_value, &QSpinBox::setValue);
+  connect(m_ir_widget, &IRWidget::ChangedY, m_ir_y_value, &QSpinBox::setValue);
+
+  auto* visual_ar = new AspectRatioWidget(m_ir_widget, IRWidget::IR_MAX_X, IRWidget::IR_MAX_Y);
 
   auto* visual_layout = new QHBoxLayout;
   visual_layout->addWidget(visual_ar);
@@ -539,6 +674,7 @@ WiiTASInputWindow::WiiTASInputWindow(QWidget* parent, int num) : TASInputWindow(
   SetDefaultContentLayoutBuilder([this] {
     auto* top_layout = new QHBoxLayout;
     top_layout->addWidget(m_ir_box);
+    top_layout->addWidget(m_ir_data_box);
     top_layout->addWidget(m_nunchuk_stick_box);
     top_layout->addWidget(m_classic_left_stick_box);
     top_layout->addWidget(m_classic_right_stick_box);
@@ -566,6 +702,7 @@ WiiTASInputWindow::WiiTASInputWindow(QWidget* parent, int num) : TASInputWindow(
   });
 
   RegisterVisibilitySection(tr("IR"), SECTION_WII_IR, m_ir_box);
+  RegisterVisibilitySection(tr("IR Data"), SECTION_WII_IR_DATA, m_ir_data_box, false);
   RegisterVisibilitySection(tr("Nunchuk Stick"), SECTION_WII_NUNCHUK_STICK, m_nunchuk_stick_box);
   RegisterVisibilitySection(tr("Left Stick"), SECTION_WII_CLASSIC_LEFT_STICK,
                             m_classic_left_stick_box);
@@ -588,6 +725,7 @@ WiiTASInputWindow::WiiTASInputWindow(QWidget* parent, int num) : TASInputWindow(
   FinalizeVisibilitySections();
 
   MakeSectionResizable(SECTION_WII_IR, m_ir_box);
+  MakeSectionResizable(SECTION_WII_IR_DATA, m_ir_data_box);
   MakeSectionResizable(SECTION_WII_NUNCHUK_STICK, m_nunchuk_stick_box);
   MakeSectionResizable(SECTION_WII_CLASSIC_LEFT_STICK, m_classic_left_stick_box);
   MakeSectionResizable(SECTION_WII_CLASSIC_RIGHT_STICK, m_classic_right_stick_box);
@@ -702,7 +840,8 @@ bool WiiTASInputWindow::IsVisibilitySectionAvailable(const std::string& key) con
     return m_active_extension != WiimoteEmu::ExtensionNumber::CLASSIC && m_is_motion_plus_attached;
   }
 
-  if (key == SECTION_WII_IR || key == SECTION_WII_REMOTE_ACCELEROMETER)
+  if (key == SECTION_WII_IR || key == SECTION_WII_IR_DATA ||
+      key == SECTION_WII_REMOTE_ACCELEROMETER)
     return m_active_extension != WiimoteEmu::ExtensionNumber::CLASSIC;
 
   return TASInputWindow::IsVisibilitySectionAvailable(key);
@@ -768,6 +907,7 @@ void WiiTASInputWindow::UpdateControlVisibility()
   {
     setWindowTitle(tr("Wii TAS Input %1 - Wii Remote + Nunchuk").arg(m_num + 1));
     set_section_visible(m_ir_box, SECTION_WII_IR, true);
+    set_section_visible(m_ir_data_box, SECTION_WII_IR_DATA, true);
     set_section_visible(m_nunchuk_stick_box, SECTION_WII_NUNCHUK_STICK, true);
     set_section_visible(m_classic_right_stick_box, SECTION_WII_CLASSIC_RIGHT_STICK, false);
     set_section_visible(m_classic_left_stick_box, SECTION_WII_CLASSIC_LEFT_STICK, false);
@@ -782,6 +922,7 @@ void WiiTASInputWindow::UpdateControlVisibility()
   {
     setWindowTitle(tr("Wii TAS Input %1 - Classic Controller").arg(m_num + 1));
     set_section_visible(m_ir_box, SECTION_WII_IR, false);
+    set_section_visible(m_ir_data_box, SECTION_WII_IR_DATA, false);
     set_section_visible(m_nunchuk_stick_box, SECTION_WII_NUNCHUK_STICK, false);
     set_section_visible(m_classic_right_stick_box, SECTION_WII_CLASSIC_RIGHT_STICK, true);
     set_section_visible(m_classic_left_stick_box, SECTION_WII_CLASSIC_LEFT_STICK, true);
@@ -795,6 +936,7 @@ void WiiTASInputWindow::UpdateControlVisibility()
   {
     setWindowTitle(tr("Wii TAS Input %1 - Wii Remote").arg(m_num + 1));
     set_section_visible(m_ir_box, SECTION_WII_IR, true);
+    set_section_visible(m_ir_data_box, SECTION_WII_IR_DATA, true);
     set_section_visible(m_nunchuk_stick_box, SECTION_WII_NUNCHUK_STICK, false);
     set_section_visible(m_classic_right_stick_box, SECTION_WII_CLASSIC_RIGHT_STICK, false);
     set_section_visible(m_classic_left_stick_box, SECTION_WII_CLASSIC_LEFT_STICK, false);
@@ -905,6 +1047,13 @@ void WiiTASInputWindow::UpdateFavoritesWidgetHeight()
     m_favorites_widget->setFixedHeight(target_height);
 }
 
+bool WiiTASInputWindow::IsCustomIRDataActive() const
+{
+  return m_ir_rotation_value && m_ir_distance_value &&
+         (m_ir_rotation_value->GetValue() != 0 ||
+          m_ir_distance_value->GetValue() != IR_DISTANCE_DEFAULT_CM);
+}
+
 void WiiTASInputWindow::UpdateLiveInputDisplay()
 {
   const auto state = Core::System::GetInstance().GetMovie().GetDisplayedWiimoteState(m_num);
@@ -925,6 +1074,12 @@ void WiiTASInputWindow::UpdateLiveInputDisplay()
   m_minus_button->OnControllerValueChanged(wiimote_state.buttons.minus != 0);
   m_home_button->OnControllerValueChanged(wiimote_state.buttons.home != 0);
 
+  const IRDisplayData ir_display = CalculateIRDisplayData(wiimote_state.camera_points);
+  const bool editing_ir_position = m_ir_widget && m_ir_widget->IsDragging();
+  const bool editing_ir_data =
+      m_ir_data_box && m_ir_data_box->isAncestorOf(QApplication::focusWidget());
+  const bool custom_ir_data_active = IsCustomIRDataActive();
+
   if (m_remote_accelerometer_x_value)
     m_remote_accelerometer_x_value->OnControllerValueChanged(wiimote_state.acceleration.value.x);
   if (m_remote_accelerometer_y_value)
@@ -932,26 +1087,15 @@ void WiiTASInputWindow::UpdateLiveInputDisplay()
   if (m_remote_accelerometer_z_value)
     m_remote_accelerometer_z_value->OnControllerValueChanged(wiimote_state.acceleration.value.z);
 
-  int ir_x = IRWidget::IR_MAX_X / 2;
-  int ir_y = IRWidget::IR_MAX_Y / 2;
-  int visible_points = 0;
-  int total_x = 0;
-  int total_y = 0;
-  for (const auto& point : wiimote_state.camera_points)
+  if (!editing_ir_position && !custom_ir_data_active)
   {
-    if (!IsVisibleIRPoint(point))
-      continue;
-    total_x += point.position.x;
-    total_y += point.position.y;
-    ++visible_points;
+    m_ir_x_value->OnControllerValueChanged(ir_display.x);
+    m_ir_y_value->OnControllerValueChanged(ir_display.y);
   }
-  if (visible_points > 0)
-  {
-    ir_x = total_x / visible_points;
-    ir_y = total_y / visible_points;
-  }
-  m_ir_x_value->OnControllerValueChanged(ir_x);
-  m_ir_y_value->OnControllerValueChanged(ir_y);
+  if (m_ir_rotation_value && ir_display.has_geometry && !editing_ir_data && !custom_ir_data_active)
+    m_ir_rotation_value->OnControllerValueChanged(ir_display.rotation_degrees);
+  if (m_ir_distance_value && ir_display.has_geometry && !editing_ir_data && !custom_ir_data_active)
+    m_ir_distance_value->OnControllerValueChanged(ir_display.distance_cm);
 
   const int gyro_center = GyroRawToTasValue(WiimoteEmu::MotionPlus::ZERO_VALUE);
   if (wiimote_state.motion_plus.has_value())
