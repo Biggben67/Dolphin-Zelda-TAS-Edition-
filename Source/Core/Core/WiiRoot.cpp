@@ -18,6 +18,7 @@
 #include "Common/StringUtil.h"
 #include "Core/Boot/Boot.h"
 #include "Core/CommonTitles.h"
+#include "Core/Config/MainSettings.h"
 #include "Core/ConfigManager.h"
 #include "Core/HW/WiiSave.h"
 #include "Core/IOS/ES/ES.h"
@@ -124,15 +125,34 @@ static bool CopyNandFile(FS::FileSystem* source_fs, const std::string& source_fi
   return true;
 }
 
+static bool ShouldClearWiiSaveForMovie(const Movie::MovieManager& movie)
+{
+  const bool playing = movie.IsPlayingInput();
+  const bool recording = movie.IsRecordingInput();
+
+  // Movies that resume from a savestate carry their save data in the state, so leave NAND alone.
+  if ((!playing && !recording) || movie.IsRecordingInputFromSaveState())
+    return false;
+
+  if (playing && !Config::Get(Config::MAIN_MOVIE_CLEAR_SAVES_ON_PLAYBACK))
+    return false;
+  if (recording && !Config::Get(Config::MAIN_MOVIE_CLEAR_SAVES_ON_RECORDING))
+    return false;
+
+  return true;
+}
+
 static void InitializeDeterministicWiiSaves(FS::FileSystem* session_fs,
                                             const BootSessionData& boot_session_data)
 {
   auto& movie = Core::System::GetInstance().GetMovie();
   const u64 title_id = SConfig::GetInstance().GetTitleID();
   const auto configured_fs = FS::MakeFileSystem(FS::Location::Configured);
+  const bool clear_wii_save_for_movie = ShouldClearWiiSaveForMovie(movie);
   if (movie.IsRecordingInput())
   {
-    if (NetPlay::IsNetPlayRunning() && !SConfig::GetInstance().bCopyWiiSaveNetplay)
+    if (clear_wii_save_for_movie ||
+        (NetPlay::IsNetPlayRunning() && !SConfig::GetInstance().bCopyWiiSaveNetplay))
     {
       movie.SetClearSave(true);
     }
@@ -144,8 +164,9 @@ static void InitializeDeterministicWiiSaves(FS::FileSystem* session_fs,
     }
   }
 
+  const bool start_from_clear_save = movie.IsStartingFromClearSave() || clear_wii_save_for_movie;
   if ((NetPlay::IsNetPlayRunning() && SConfig::GetInstance().bCopyWiiSaveNetplay) ||
-      (movie.IsMovieActive() && !movie.IsStartingFromClearSave()))
+      (movie.IsMovieActive() && !start_from_clear_save))
   {
     auto* sync_fs = boot_session_data.GetWiiSyncFS();
     auto& sync_titles = boot_session_data.GetWiiSyncTitles();
