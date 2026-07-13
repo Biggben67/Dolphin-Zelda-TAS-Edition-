@@ -323,16 +323,15 @@ void AdvancedPane::CreateLayout()
   auto* const clear_saves_on_playback = new ConfigBool(
       tr("Delete Saves Before Movie Playback"), Config::MAIN_MOVIE_CLEAR_SAVES_ON_PLAYBACK);
   clear_saves_on_playback->SetDescription(
-      tr("Permanently deletes the SRAM and memory card files for the booted region before a movie "
-         "that uses a memory card starts playing, so the run boots from a clean save and stays in "
-         "sync."));
+      tr("Starts movie playback from a clean save by clearing GameCube SRAM/memory cards or by "
+         "using a clean Wii title save for the temporary Wii NAND."));
   movie_group->layout()->addWidget(clear_saves_on_playback);
 
   auto* const clear_saves_on_recording = new ConfigBool(
       tr("Delete Saves Before Movie Recording"), Config::MAIN_MOVIE_CLEAR_SAVES_ON_RECORDING);
   clear_saves_on_recording->SetDescription(
-      tr("Permanently deletes the SRAM and memory card files for the booted region before a new "
-         "recording starts, so the run begins from a clean save and stays in sync."));
+      tr("Starts new movie recordings from a clean save by clearing GameCube SRAM/memory cards or "
+         "by using a clean Wii title save for the temporary Wii NAND."));
   movie_group->layout()->addWidget(clear_saves_on_recording);
 
   auto* automation_group = new QGroupBox(tr("Automation"));
