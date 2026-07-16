@@ -66,6 +66,13 @@ struct FrameDumpContext
 
 namespace
 {
+#if defined(AV_LEVEL_UNKNOWN)
+// FFmpeg 8 renamed the retired FF_LEVEL_UNKNOWN
+constexpr int FFMPEG_LEVEL_UNKNOWN = AV_LEVEL_UNKNOWN;
+#else
+constexpr int FFMPEG_LEVEL_UNKNOWN = FF_LEVEL_UNKNOWN;
+#endif
+
 AVRational GetTimeBaseForCurrentRefreshRate(s64 max_denominator)
 {
   // TODO: GetTargetRefreshRate* are not safe from GPU thread.
@@ -311,7 +318,7 @@ bool FFMpegFrameDump::CreateVideoFile()
   m_context->codec->time_base = time_base;
   m_context->codec->gop_size = composite_dump && !use_lossless ? 60 : 1;
   m_context->codec->max_b_frames = 0;
-  m_context->codec->level = composite_dump ? FF_LEVEL_UNKNOWN : 1;
+  m_context->codec->level = composite_dump ? FFMPEG_LEVEL_UNKNOWN : 1;
 
   if (const unsigned int thread_count = std::thread::hardware_concurrency(); thread_count > 1)
     m_context->codec->thread_count = static_cast<int>(thread_count);

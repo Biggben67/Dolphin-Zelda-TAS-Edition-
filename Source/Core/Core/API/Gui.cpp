@@ -221,6 +221,7 @@ void Gui::CanvasCommit(WidgetId id)
 {
   std::lock_guard lock(m_widget_mutex);
   m_canvas_committed[id] = m_canvas_building[id];
+  ++m_canvas_generations[id];
 }
 
 std::vector<Gui::CanvasPrimitive> Gui::SnapshotCanvas(WidgetId id)
@@ -228,6 +229,48 @@ std::vector<Gui::CanvasPrimitive> Gui::SnapshotCanvas(WidgetId id)
   std::lock_guard lock(m_widget_mutex);
   auto it = m_canvas_committed.find(id);
   return it == m_canvas_committed.end() ? std::vector<CanvasPrimitive>{} : it->second;
+}
+
+u64 Gui::CanvasGeneration(WidgetId id)
+{
+  std::lock_guard lock(m_widget_mutex);
+  return m_canvas_generations[id];
+}
+
+void Gui::SetHardwareMesh(WidgetId id, size_t group, std::vector<HardwareVertex> vertices)
+{
+  if (group >= 8)
+    return;
+  std::lock_guard lock(m_widget_mutex);
+  auto& snapshot = m_hardware_meshes[id];
+  snapshot.groups[group] = std::make_shared<const std::vector<HardwareVertex>>(std::move(vertices));
+  ++snapshot.generation;
+}
+
+void Gui::SetHardwareState(WidgetId id, const HardwareState& state)
+{
+  std::lock_guard lock(m_widget_mutex);
+  auto& snapshot = m_hardware_meshes[id];
+  // Camera state changes much more often than the Direct2D overlay. Preserve
+  // its retained text instead of clearing the panel on every movement.
+  HardwareState updated = state;
+  updated.overlay_lines = snapshot.state.overlay_lines;
+  snapshot.state = std::move(updated);
+  ++snapshot.generation;
+}
+
+void Gui::SetHardwareOverlay(WidgetId id, const std::array<std::string, 8>& lines)
+{
+  std::lock_guard lock(m_widget_mutex);
+  auto& snapshot = m_hardware_meshes[id];
+  snapshot.state.overlay_lines = lines;
+  ++snapshot.generation;
+}
+
+Gui::HardwareSnapshot Gui::SnapshotHardwareMesh(WidgetId id)
+{
+  std::lock_guard lock(m_widget_mutex);
+  return m_hardware_meshes[id];
 }
 
 void Gui::CanvasReportMouse(WidgetId id, float x, float y, bool inside)
@@ -255,6 +298,30 @@ void Gui::CanvasReportRightClick(WidgetId id, float x, float y)
   in.right_clicked = true;
   in.right_click_x = x;
   in.right_click_y = y;
+}
+
+void Gui::CanvasReportRightDown(WidgetId id, bool down)
+{
+  std::lock_guard lock(m_widget_mutex);
+  m_canvas_input[id].right_down = down;
+}
+
+void Gui::CanvasReportLeftDown(WidgetId id, bool down)
+{
+  std::lock_guard lock(m_widget_mutex);
+  m_canvas_input[id].left_down = down;
+}
+
+void Gui::CanvasReportKeyMask(WidgetId id, u32 mask)
+{
+  std::lock_guard lock(m_widget_mutex);
+  m_canvas_input[id].key_mask = mask;
+}
+
+void Gui::CanvasReportCaptureToggle(WidgetId id)
+{
+  std::lock_guard lock(m_widget_mutex);
+  m_canvas_input[id].capture_toggle = true;
 }
 
 void Gui::CanvasReportWheel(WidgetId id, float delta)
@@ -315,6 +382,37 @@ bool Gui::CanvasTakeRightClick(WidgetId id, Vec2f& pos)
     return false;
   it->second.right_clicked = false;
   pos = {it->second.right_click_x, it->second.right_click_y};
+  return true;
+}
+
+bool Gui::CanvasRightDown(WidgetId id)
+{
+  std::lock_guard lock(m_widget_mutex);
+  const auto it = m_canvas_input.find(id);
+  return it != m_canvas_input.end() && it->second.right_down;
+}
+
+bool Gui::CanvasLeftDown(WidgetId id)
+{
+  std::lock_guard lock(m_widget_mutex);
+  const auto it = m_canvas_input.find(id);
+  return it != m_canvas_input.end() && it->second.left_down;
+}
+
+u32 Gui::CanvasKeyMask(WidgetId id)
+{
+  std::lock_guard lock(m_widget_mutex);
+  const auto it = m_canvas_input.find(id);
+  return it == m_canvas_input.end() ? 0 : it->second.key_mask;
+}
+
+bool Gui::CanvasTakeCaptureToggle(WidgetId id)
+{
+  std::lock_guard lock(m_widget_mutex);
+  auto it = m_canvas_input.find(id);
+  if (it == m_canvas_input.end() || !it->second.capture_toggle)
+    return false;
+  it->second.capture_toggle = false;
   return true;
 }
 
@@ -488,6 +586,22 @@ void Gui::SetStyle(WidgetId id, const std::string& style)
   auto it = m_widgets.find(id);
   if (it != m_widgets.end())
     it->second.style = style;
+}
+
+void Gui::SetClipboardText(std::string text)
+{
+  std::lock_guard lock(m_widget_mutex);
+  m_pending_clipboard_text = std::move(text);
+}
+
+bool Gui::TakeClipboardText(std::string& text)
+{
+  std::lock_guard lock(m_widget_mutex);
+  if (!m_pending_clipboard_text)
+    return false;
+  text = std::move(*m_pending_clipboard_text);
+  m_pending_clipboard_text.reset();
+  return true;
 }
 
 std::vector<Gui::WindowInfo> Gui::SnapshotDetachedWindows()

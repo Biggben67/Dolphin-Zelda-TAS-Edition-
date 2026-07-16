@@ -240,7 +240,8 @@ void Host_UpdateTitle(const std::string& title)
 
 bool Host_RendererHasFocus()
 {
-  return Host::GetInstance()->GetRenderFocus() || Host::GetInstance()->GetGBAFocus();
+  return Host::GetInstance()->GetRenderFocus() || Host::GetInstance()->GetGBAFocus() ||
+         API::GetGui().IsDetachedScriptWindowFocused();
 }
 
 bool Host_RendererHasFullFocus()

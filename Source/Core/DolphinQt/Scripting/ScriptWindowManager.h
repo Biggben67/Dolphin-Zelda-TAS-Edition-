@@ -4,11 +4,17 @@
 
 #pragma once
 
+#include <atomic>
 #include <map>
+#include <memory>
 
 #include <QObject>
 #include <QTimer>
 #include <QWidget>
+
+class QVBoxLayout;
+class QScrollArea;
+class ScriptHardwareMeshWidget;
 
 #include "Core/API/Gui.h"
 #include "DolphinQt/Scripting/ScriptCanvasWidget.h"
@@ -41,10 +47,27 @@ private:
     QWidget* window;
     std::map<API::Gui::WidgetId, ManagedChild> children;
     ScriptCanvasWidget* canvas = nullptr;  // non-null for freeform canvas windows
+    ScriptHardwareMeshWidget* hardware_mesh = nullptr;
+    QWidget* canvas_host = nullptr;
+    QVBoxLayout* root_layout = nullptr;
+    QVBoxLayout* controls_layout = nullptr;
+    QVBoxLayout* trigger_layout = nullptr;
+    QVBoxLayout* collider_layout = nullptr;
+    QWidget* controls_host = nullptr;
+    QScrollArea* controls_scroll = nullptr;
+    bool tp_collision_layout = false;
+    bool viewer_fullscreen = false;
+    bool hardware_active = false;
+    bool hardware_visibility_initialized = false;
+    u64 canvas_generation = 0;
+    bool canvas_generation_set = false;
   };
 
   std::map<API::Gui::WidgetId, ManagedWindow> m_windows;
   QTimer m_timer;
-  // Drives the script HostUpdate event so scripts keep ticking while emulation is paused.
+  // Dispatches paused-script UI work onto the emulation CPU thread.  Python
+  // must never be invoked directly by a Qt timer.
   QTimer m_host_update_timer;
+  // Coalesce paused canvas updates so they cannot queue ahead of frame-step jobs.
+  std::shared_ptr<std::atomic_bool> m_host_update_pending = std::make_shared<std::atomic_bool>(false);
 };

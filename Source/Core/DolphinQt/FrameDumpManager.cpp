@@ -68,6 +68,7 @@
 #include "DolphinQt/GBAWidget.h"
 #include "DolphinQt/RenderWidget.h"
 #include "DolphinQt/Scripting/InputDisplayWidget.h"
+#include "DolphinQt/Scripting/ScriptHardwareMeshWidget.h"
 
 #include "VideoCommon/FrameDumper.h"
 #include "VideoCommon/OnScreenDisplay.h"
@@ -904,6 +905,9 @@ QImage CaptureWidgetOffscreen(QWidget* widget, const QImage& game_frame, int ups
   if (IsGameWidget(widget))
     return game_frame;
 
+  if (auto* hardware = qobject_cast<ScriptHardwareMeshWidget*>(widget))
+    return UpscaleNearest(hardware->CaptureFrame(), upscale_factor);
+
 #if defined(HAS_LIBMGBA)
   if (const auto* gba = qobject_cast<GBAWidget*>(widget))
   {
@@ -938,6 +942,19 @@ QImage CaptureWidgetOffscreen(QWidget* widget, const QImage& game_frame, int ups
   QPainter painter(&image);
   painter.scale(render_scale, render_scale);
   widget->render(&painter);
+  // QWidget::render() paints a native D3D child as black. Replace that child
+  // rectangle with its resolved D3D backbuffer so script tools participate in
+  // the same preview, composite, and separate-window dump paths as Qt tools.
+  if (auto* hardware = widget->findChild<ScriptHardwareMeshWidget*>(); hardware &&
+      hardware->isVisible())
+  {
+    const QImage hardware_frame = hardware->CaptureFrame();
+    if (!hardware_frame.isNull())
+    {
+      const QPoint origin = hardware->mapTo(widget, QPoint(0, 0));
+      painter.drawImage(QRect(origin, hardware->size()), hardware_frame);
+    }
+  }
   return image;
 }
 }  // namespace

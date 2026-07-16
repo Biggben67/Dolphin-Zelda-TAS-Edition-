@@ -432,6 +432,7 @@ target_sources(dolphin-emu PRIVATE
   Scripting/ScriptFavoritesWidget.cpp
   Scripting/ScriptWindowManager.cpp
   Scripting/ScriptCanvasWidget.cpp
+  Scripting/ScriptHardwareMeshWidget.cpp
   Scripting/InputDisplayController.cpp
   Scripting/InputDisplayDumper.cpp
   Scripting/InputDisplaySkin.cpp
@@ -441,6 +442,7 @@ target_sources(dolphin-emu PRIVATE
   Scripting/ScriptFavoritesWidget.h
   Scripting/ScriptWindowManager.h
   Scripting/ScriptCanvasWidget.h
+  Scripting/ScriptHardwareMeshWidget.h
   Scripting/InputDisplayController.h
   Scripting/InputDisplayDumper.h
   Scripting/InputDisplaySkin.h
@@ -500,6 +502,9 @@ if (WIN32)
     gdi32.lib
     shell32.lib
     dwmapi.lib # Needed to set window decorations for dark theme
+    d3d11.lib
+    dxgi.lib
+    d3dcompiler.lib
   )
 endif()
 
