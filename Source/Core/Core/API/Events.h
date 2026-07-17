@@ -19,7 +19,8 @@ namespace Events
 struct FrameAdvance
 {
 };
-// Host-thread heartbeat, fired off a UI timer so scripts keep running while emulation is paused.
+// Script/UI heartbeat emitted by the detached-window manager at a coalesced
+// rate on the CPU thread, regardless of emulation state.
 struct HostUpdate
 {
 };
@@ -30,6 +31,14 @@ struct FrameDrawn
   const u8* data;
 };
 struct MemoryBreakpoint
+{
+  bool write;
+  u32 addr;
+  u64 value;
+};
+// A non-pausing memory access observer.  Unlike MemoryBreakpoint, this does
+// not interrupt emulation or inject a DSI exception.
+struct MemoryWatch
 {
   bool write;
   u32 addr;
@@ -203,6 +212,7 @@ using EventHub = GenericEventHub<
   Events::HostUpdate,
   Events::FrameDrawn,
   Events::MemoryBreakpoint,
+  Events::MemoryWatch,
   Events::CodeBreakpoint,
   Events::SetInterrupt,
   Events::ClearInterrupt,

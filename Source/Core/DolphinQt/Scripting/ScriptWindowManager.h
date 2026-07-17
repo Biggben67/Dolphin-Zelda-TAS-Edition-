@@ -51,11 +51,10 @@ private:
     QWidget* canvas_host = nullptr;
     QVBoxLayout* root_layout = nullptr;
     QVBoxLayout* controls_layout = nullptr;
-    QVBoxLayout* trigger_layout = nullptr;
-    QVBoxLayout* collider_layout = nullptr;
+    std::map<std::string, QVBoxLayout*> group_layouts;
     QWidget* controls_host = nullptr;
     QScrollArea* controls_scroll = nullptr;
-    bool tp_collision_layout = false;
+    bool grouped_layout = false;
     bool viewer_fullscreen = false;
     bool hardware_active = false;
     bool hardware_visibility_initialized = false;
@@ -68,6 +67,7 @@ private:
   // Dispatches paused-script UI work onto the emulation CPU thread.  Python
   // must never be invoked directly by a Qt timer.
   QTimer m_host_update_timer;
-  // Coalesce paused canvas updates so they cannot queue ahead of frame-step jobs.
+  // Coalesce heartbeat updates so background UI work cannot queue ahead of
+  // emulation/frame-step jobs.
   std::shared_ptr<std::atomic_bool> m_host_update_pending = std::make_shared<std::atomic_bool>(false);
 };

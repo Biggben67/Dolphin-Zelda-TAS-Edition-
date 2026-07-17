@@ -773,8 +773,16 @@ static std::string CreateSysDirectoryPath()
 
 #if defined(__APPLE__)
   const std::string sys_directory = GetBundleDirectory() + DIR_SEP SYSDATA_DIR DIR_SEP;
-#elif defined(_WIN32) || defined(LINUX_LOCAL_DEV)
+#elif defined(_WIN32)
   const std::string sys_directory = GetExeDirectory() + DIR_SEP SYSDATA_DIR DIR_SEP;
+#elif defined(LINUX_LOCAL_DEV)
+  // AppImage executes the AppDir entrypoint through a temporary mount. Use the
+  // runtime's stable mountpoint when available instead of inferring it from
+  // /proc/self/exe, which may refer to the AppImage launcher.
+  const char* const appdir = getenv("APPDIR");
+  const std::string sys_directory =
+      appdir && appdir[0] != '\0' ? std::string(appdir) + DIR_SEP SYSDATA_DIR DIR_SEP :
+                                    GetExeDirectory() + DIR_SEP SYSDATA_DIR DIR_SEP;
 #elif defined ANDROID
   const std::string sys_directory = s_android_sys_directory + DIR_SEP;
   ASSERT_MSG(COMMON, !s_android_sys_directory.empty(), "Sys directory has not been set");

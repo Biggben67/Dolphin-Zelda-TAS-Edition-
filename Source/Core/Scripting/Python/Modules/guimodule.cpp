@@ -6,7 +6,9 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstring>
+#include <limits>
 #include <vector>
 
 #include "Common/Logging/Log.h"
@@ -182,6 +184,18 @@ static void widget_enable_canvas(PyObject* self, u64 id, int width, int height)
 {
   GuiModuleState* state = Py::GetState<GuiModuleState>(self);
   state->gui->EnableCanvas(id, width, height);
+}
+
+static void widget_enable_hardware_canvas(PyObject* self, u64 id)
+{
+  GuiModuleState* state = Py::GetState<GuiModuleState>(self);
+  state->gui->EnableHardwareCanvas(id);
+}
+
+static void widget_set_group(PyObject* self, u64 id, const char* group)
+{
+  GuiModuleState* state = Py::GetState<GuiModuleState>(self);
+  state->gui->SetChildGroup(id, std::string(group));
 }
 
 static u64 widget_button(PyObject* self, u64 parent, const char* label)
@@ -426,29 +440,156 @@ static PyObject* canvas_hardware_mesh(PyObject* self, PyObject* args)
   Py_RETURN_NONE;
 }
 
-static PyObject* canvas_hardware_overlay(PyObject* self, PyObject* args)
+static bool GetHudFloat(PyObject* command, Py_ssize_t index, float* value)
+{
+  const double parsed = PyFloat_AsDouble(PySequence_Fast_GET_ITEM(command, index));
+  if (PyErr_Occurred() || !std::isfinite(parsed) ||
+      std::abs(parsed) > std::numeric_limits<float>::max())
+  {
+    if (!PyErr_Occurred())
+      PyErr_SetString(PyExc_ValueError, "hardware HUD coordinates must be finite numbers");
+    return false;
+  }
+  *value = static_cast<float>(parsed);
+  return true;
+}
+
+static bool GetHudNonNegativeFloat(PyObject* command, Py_ssize_t index, float* value)
+{
+  if (!GetHudFloat(command, index, value))
+    return false;
+  if (*value < 0.0f)
+  {
+    PyErr_SetString(PyExc_ValueError, "hardware HUD radii, rounding, and thickness must be non-negative");
+    return false;
+  }
+  return true;
+}
+
+static bool GetHudColor(PyObject* command, Py_ssize_t index, u32* color)
+{
+  const unsigned long parsed = PyLong_AsUnsignedLong(PySequence_Fast_GET_ITEM(command, index));
+  if (PyErr_Occurred())
+    return false;
+  if (parsed > std::numeric_limits<u32>::max())
+  {
+    PyErr_SetString(PyExc_ValueError, "hardware HUD colors must be ARGB u32 values");
+    return false;
+  }
+  *color = static_cast<u32>(parsed);
+  return true;
+}
+
+static PyObject* canvas_hardware_hud(PyObject* self, PyObject* args)
 {
   u64 id;
   PyObject* sequence;
   if (!PyArg_ParseTuple(args, "KO", &id, &sequence))
     return nullptr;
-  PyObject* fast = PySequence_Fast(sequence, "hardware overlay requires a sequence of strings");
-  if (!fast)
+  PyObject* commands = PySequence_Fast(sequence, "hardware HUD requires a sequence of commands");
+  if (!commands)
     return nullptr;
-  std::array<std::string, 8> lines{};
-  const Py_ssize_t count = std::min<Py_ssize_t>(PySequence_Fast_GET_SIZE(fast), lines.size());
+
+  constexpr Py_ssize_t MAX_HUD_COMMANDS = 16'384;
+  const Py_ssize_t count = PySequence_Fast_GET_SIZE(commands);
+  if (count > MAX_HUD_COMMANDS)
+  {
+    Py_DECREF(commands);
+    PyErr_SetString(PyExc_ValueError, "hardware HUD supports at most 16384 commands");
+    return nullptr;
+  }
+
+  using P = API::Gui::CanvasPrimitive;
+  std::vector<P> primitives;
+  primitives.reserve(static_cast<size_t>(count));
   for (Py_ssize_t i = 0; i < count; ++i)
   {
-    const char* text = PyUnicode_AsUTF8(PySequence_Fast_GET_ITEM(fast, i));
-    if (!text)
+    PyObject* command = PySequence_Fast(PySequence_Fast_GET_ITEM(commands, i),
+                                        "each hardware HUD command must be a sequence");
+    if (!command)
+      break;
+    const Py_ssize_t size = PySequence_Fast_GET_SIZE(command);
+    const char* kind = size > 0 ? PyUnicode_AsUTF8(PySequence_Fast_GET_ITEM(command, 0)) : nullptr;
+    P primitive{};
+    bool valid = kind != nullptr;
+    const auto point = [&](Py_ssize_t index, Vec2f* out) {
+      return GetHudFloat(command, index, &out->x) && GetHudFloat(command, index + 1, &out->y);
+    };
+    if (valid && std::strcmp(kind, "line") == 0 && size == 7)
     {
-      Py_DECREF(fast);
-      return nullptr;
+      primitive.type = P::Type::Line;
+      valid = point(1, &primitive.p0) && point(3, &primitive.p1) && GetHudColor(command, 5, &primitive.color) &&
+              GetHudNonNegativeFloat(command, 6, &primitive.thickness);
     }
-    lines[static_cast<size_t>(i)] = text;
+    else if (valid && std::strcmp(kind, "rect") == 0 && size == 8)
+    {
+      primitive.type = P::Type::Rect;
+      valid = point(1, &primitive.p0) && point(3, &primitive.p1) && GetHudColor(command, 5, &primitive.color) &&
+              GetHudNonNegativeFloat(command, 6, &primitive.rounding) &&
+              GetHudNonNegativeFloat(command, 7, &primitive.thickness);
+    }
+    else if (valid && std::strcmp(kind, "rect_filled") == 0 && size == 7)
+    {
+      primitive.type = P::Type::RectFilled;
+      valid = point(1, &primitive.p0) && point(3, &primitive.p1) && GetHudColor(command, 5, &primitive.color) &&
+              GetHudNonNegativeFloat(command, 6, &primitive.rounding);
+    }
+    else if (valid && std::strcmp(kind, "circle") == 0 && size == 6)
+    {
+      primitive.type = P::Type::Circle;
+      valid = point(1, &primitive.p0) && GetHudNonNegativeFloat(command, 3, &primitive.radius) &&
+              GetHudColor(command, 4, &primitive.color) &&
+              GetHudNonNegativeFloat(command, 5, &primitive.thickness);
+    }
+    else if (valid && std::strcmp(kind, "circle_filled") == 0 && size == 5)
+    {
+      primitive.type = P::Type::CircleFilled;
+      valid = point(1, &primitive.p0) && GetHudNonNegativeFloat(command, 3, &primitive.radius) &&
+              GetHudColor(command, 4, &primitive.color);
+    }
+    else if (valid && std::strcmp(kind, "triangle") == 0 && size == 9)
+    {
+      primitive.type = P::Type::Triangle;
+      valid = point(1, &primitive.p0) && point(3, &primitive.p1) && point(5, &primitive.p2) &&
+              GetHudColor(command, 7, &primitive.color) &&
+              GetHudNonNegativeFloat(command, 8, &primitive.thickness);
+    }
+    else if (valid && std::strcmp(kind, "triangle_filled") == 0 && size == 8)
+    {
+      primitive.type = P::Type::TriangleFilled;
+      valid = point(1, &primitive.p0) && point(3, &primitive.p1) && point(5, &primitive.p2) &&
+              GetHudColor(command, 7, &primitive.color);
+    }
+    else if (valid && std::strcmp(kind, "text") == 0 && size == 5)
+    {
+      primitive.type = P::Type::Text;
+      const char* text = PyUnicode_AsUTF8(PySequence_Fast_GET_ITEM(command, 4));
+      valid = point(1, &primitive.p0) && GetHudColor(command, 3, &primitive.color) && text != nullptr;
+      if (valid)
+      {
+        constexpr size_t MAX_HUD_TEXT_BYTES = 16'384;
+        if (std::strlen(text) > MAX_HUD_TEXT_BYTES)
+        {
+          PyErr_SetString(PyExc_ValueError, "hardware HUD text is limited to 16384 UTF-8 bytes per command");
+          valid = false;
+        }
+        primitive.text = text;
+      }
+    }
+    else
+    {
+      valid = false;
+      PyErr_Format(PyExc_ValueError, "invalid hardware HUD command at index %zd", i);
+    }
+    Py_DECREF(command);
+    if (!valid)
+      break;
+    primitives.push_back(std::move(primitive));
   }
-  Py_DECREF(fast);
-  Py::GetState<GuiModuleState>(self)->gui->SetHardwareOverlay(id, lines);
+  Py_DECREF(commands);
+  if (PyErr_Occurred())
+    return nullptr;
+  Py::GetState<GuiModuleState>(self)->gui->SetHardwareHud(id, std::move(primitives));
   Py_RETURN_NONE;
 }
 
@@ -677,13 +818,18 @@ class _BaseWindow:
         # Attach a drawing surface to this window; form widgets added here sit below it.
         _widget_enable_canvas(self._id, width, height)
         return Canvas(self._id, width, height)
-    def _child(self, wid, style, text_color, bg_color):
+    def enable_hardware_canvas(self):
+        # Request the native hardware canvas. CPU canvas windows remain the default.
+        _widget_enable_hardware_canvas(self._id)
+    def _child(self, wid, style, text_color, bg_color, group=None):
         if text_color is not None:
             _widget_set_text_color(wid, text_color)
         if bg_color is not None:
             _widget_set_bg_color(wid, bg_color)
         if style is not None:
             _widget_set_style(wid, style)
+        if group is not None:
+            _widget_set_group(wid, group)
         return wid
 
 class Overlay(_BaseWindow):
@@ -702,19 +848,48 @@ class Overlay(_BaseWindow):
                                      None, text_color, bg_color))
 
 class Window(_BaseWindow):
-    def button(self, label, *, style=None, text_color=None, bg_color=None):
-        return Button(self._child(_widget_button(self._id, label), style, text_color, bg_color))
-    def slider_float(self, label, min = 0.0, max = 1.0, *, style=None, text_color=None, bg_color=None):
+    def button(self, label, *, style=None, text_color=None, bg_color=None, group=None):
+        return Button(self._child(_widget_button(self._id, label), style, text_color, bg_color, group))
+    def slider_float(self, label, min = 0.0, max = 1.0, *, style=None, text_color=None, bg_color=None, group=None):
         return SliderFloat(self._child(_widget_slider_float(self._id, label, min, max),
-                                       style, text_color, bg_color))
-    def text(self, text = "", *, style=None, text_color=None, bg_color=None):
-        return Text(self._child(_widget_text(self._id, text), style, text_color, bg_color))
-    def checkbox(self, label, checked = False, *, style=None, text_color=None, bg_color=None):
+                                       style, text_color, bg_color, group))
+    def text(self, text = "", *, style=None, text_color=None, bg_color=None, group=None):
+        return Text(self._child(_widget_text(self._id, text), style, text_color, bg_color, group))
+    def checkbox(self, label, checked = False, *, style=None, text_color=None, bg_color=None, group=None):
         return Checkbox(self._child(_widget_checkbox(self._id, label, int(checked)),
-                                    style, text_color, bg_color))
-    def input_text(self, label, initial = "", *, style=None, text_color=None, bg_color=None):
+                                    style, text_color, bg_color, group))
+    def input_text(self, label, initial = "", *, style=None, text_color=None, bg_color=None, group=None):
         return InputText(self._child(_widget_input_text(self._id, label, initial),
-                                     style, text_color, bg_color))
+                                     style, text_color, bg_color, group))
+
+class HardwareHud:
+    """Retained screen-space draw list for a hardware canvas.
+
+    HUD coordinates are logical canvas pixels. Commands are composited after
+    the 3D mesh and preserve their Python order, which makes the class useful
+    for custom panels as well as simple annotations.
+    """
+    def __init__(self, canvas_id):
+        self._id = canvas_id
+        self._commands = []
+    def line(self, a, b, color, thickness = 1):
+        self._commands.append(("line", a[0], a[1], b[0], b[1], color, thickness)); return self
+    def rect(self, a, b, color, rounding = 0, thickness = 1):
+        self._commands.append(("rect", a[0], a[1], b[0], b[1], color, rounding, thickness)); return self
+    def rect_filled(self, a, b, color, rounding = 0):
+        self._commands.append(("rect_filled", a[0], a[1], b[0], b[1], color, rounding)); return self
+    def circle(self, center, radius, color, thickness = 1):
+        self._commands.append(("circle", center[0], center[1], radius, color, thickness)); return self
+    def circle_filled(self, center, radius, color):
+        self._commands.append(("circle_filled", center[0], center[1], radius, color)); return self
+    def triangle(self, a, b, c, color, thickness = 1):
+        self._commands.append(("triangle", a[0], a[1], b[0], b[1], c[0], c[1], color, thickness)); return self
+    def triangle_filled(self, a, b, c, color):
+        self._commands.append(("triangle_filled", a[0], a[1], b[0], b[1], c[0], c[1], color)); return self
+    def text(self, pos, color, text):
+        self._commands.append(("text", pos[0], pos[1], color, str(text))); return self
+    def commit(self):
+        _canvas_hardware_hud(self._id, tuple(self._commands))
 
 class Canvas:
     def __init__(self, id, width, height):
@@ -752,8 +927,18 @@ class Canvas:
     def hardware_mesh(self, group, positions, colors):
         # positions: packed xyz float32 bytes; colors: packed ARGB u32 bytes.
         _canvas_hardware_mesh(self._id, group, positions, colors)
+    def hud(self):
+        return HardwareHud(self._id)
+    def hardware_hud(self, commands):
+        """Commit a sequence produced by HardwareHud, or compatible commands."""
+        _canvas_hardware_hud(self._id, tuple(commands))
     def hardware_overlay(self, lines):
-        _canvas_hardware_overlay(self._id, tuple(lines))
+        # Compatibility shim for older scripts. New scripts should own their
+        # layout through hud(), rather than relying on a renderer-made panel.
+        hud = self.hud()
+        for i, line in enumerate(lines):
+            hud.text((12, 12 + i * 18), 0xFFE3E8F0, line)
+        hud.commit()
     def hardware_state(self, eye, right, up, forward, focal, radius, fill_opacity, wire_opacity,
                        filled=True, wireframe=True, enabled=True, xray=False, debug_on_top=False,
                        fullscreen=False, clean_capture=False):
@@ -844,6 +1029,8 @@ PyMODINIT_FUNC PyInit_gui()
       {"_draw_convex_poly_filled", draw_convex_poly_filled, METH_VARARGS, ""},
       {"_widget_window", Py::as_py_func<widget_window>, METH_VARARGS, ""},
       {"_widget_enable_canvas", Py::as_py_func<widget_enable_canvas>, METH_VARARGS, ""},
+      {"_widget_enable_hardware_canvas", Py::as_py_func<widget_enable_hardware_canvas>, METH_VARARGS, ""},
+      {"_widget_set_group", Py::as_py_func<widget_set_group>, METH_VARARGS, ""},
       {"_widget_button", Py::as_py_func<widget_button>, METH_VARARGS, ""},
       {"_widget_slider_float", Py::as_py_func<widget_slider_float>, METH_VARARGS, ""},
       {"_widget_text", Py::as_py_func<widget_text>, METH_VARARGS, ""},
@@ -874,7 +1061,7 @@ PyMODINIT_FUNC PyInit_gui()
       {"_canvas_depth_triangle_wire", Py::as_py_func<canvas_depth_triangle_wire>, METH_VARARGS,
        ""},
       {"_canvas_hardware_mesh", canvas_hardware_mesh, METH_VARARGS, ""},
-      {"_canvas_hardware_overlay", canvas_hardware_overlay, METH_VARARGS, ""},
+      {"_canvas_hardware_hud", canvas_hardware_hud, METH_VARARGS, ""},
       {"_canvas_hardware_state", Py::as_py_func<canvas_hardware_state>, METH_VARARGS, ""},
       {"_canvas_text", Py::as_py_func<canvas_text>, METH_VARARGS, ""},
       {"_canvas_image", Py::as_py_func<canvas_image>, METH_VARARGS, ""},

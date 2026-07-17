@@ -559,7 +559,17 @@ void MMU::Memcheck(u32 address, u64 var, bool write, size_t size)
 
   mc->num_hits++;
 
-  const bool pause = mc->Action(m_system, var, address, write, size, m_ppc_state.pc);
+  bool notify = false;
+  const bool pause = mc->Action(m_system, var, address, write, size, m_ppc_state.pc, &notify);
+  if (!pause && !notify)
+    return;
+
+  // A memory watch observes the access on the CPU thread without changing
+  // emulation state.  This is useful for one-frame game registries that are
+  // cleared before the normal frame-advance scripting callback.
+  if (notify)
+    API::GetEventHub().EmitEvent(API::Events::MemoryWatch{write, address, var});
+
   if (!pause)
     return;
 

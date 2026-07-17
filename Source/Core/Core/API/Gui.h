@@ -83,7 +83,9 @@ public:
     std::optional<u32> text_color;   // ARGB
     std::optional<u32> bg_color;     // ARGB
     std::string style;               // QSS, detached only
+    std::string group;               // Detached-window control section
     bool canvas = false;             // Window only: freeform QPainter canvas
+    bool hardware_canvas = false;    // Window only: native GPU canvas requested by the script
     int canvas_w = 0, canvas_h = 0;  // Window only
     bool overlay = false;            // Window only: frameless, stays-on-top, not user-closable
     bool visible = true;             // child widgets: hidden ones aren't rendered
@@ -146,16 +148,18 @@ public:
     bool debug_on_top = false;
     bool fullscreen = false;
     bool clean_capture = false;
-    // Native D3D overlay text for the TP viewer. Keeping this in the same
-    // snapshot avoids an overlapping Qt paint surface in GPU mode.
-    std::array<std::string, 8> overlay_lines{};
   };
   struct HardwareSnapshot
   {
-    // 0-3: static collision classes; 4: movable collision triangles;
-    // 5: dynamic debug lines; 6: selected-vertex marker; 7: filled trigger
-    // and push-collider volumes.
+    // Eight script-addressable mesh slots. The renderer uses slots 0-4 as
+    // depth-writing triangles, slot 5 as a line list, slot 6 as triangles
+    // drawn above the depth buffer, and slot 7 as depth-tested overlay fills.
+    // This is a rendering contract, not a game or tool identity.
     std::array<std::shared_ptr<const std::vector<HardwareVertex>>, 8> groups;
+    // Script-owned screen-space HUD. The native renderer composites these
+    // retained primitives after the world mesh, so no script needs a second
+    // QWidget or a renderer-specific C++ overlay to draw an interface.
+    std::shared_ptr<const std::vector<CanvasPrimitive>> hud;
     HardwareState state;
     u64 generation = 0;
   };
@@ -170,7 +174,7 @@ public:
   u64 CanvasGeneration(WidgetId id);
   void SetHardwareMesh(WidgetId id, size_t group, std::vector<HardwareVertex> vertices);
   void SetHardwareState(WidgetId id, const HardwareState& state);
-  void SetHardwareOverlay(WidgetId id, const std::array<std::string, 8>& lines);
+  void SetHardwareHud(WidgetId id, std::vector<CanvasPrimitive> primitives);
   HardwareSnapshot SnapshotHardwareMesh(WidgetId id);
 
   // Canvas pointer input: Qt widget reports (main thread), scripts consume (emu thread).
@@ -220,7 +224,11 @@ public:
   WidgetId GetOrCreateWindow(void* owner, const std::string& title, bool embedded = true);
   // Attaches a freeform canvas region to an existing window so it hosts a canvas and child widgets.
   void EnableCanvas(WidgetId window, int width, int height);
+  // Opt a detached canvas window into the native hardware mesh renderer.
+  // This is a script capability, not a per-tool or per-game special case.
+  void EnableHardwareCanvas(WidgetId window);
   WidgetId AddChild(WidgetId parent, WidgetKind kind, const std::string& label);
+  void SetChildGroup(WidgetId id, const std::string& group);
   bool TakeClicked(WidgetId id);
   float GetValue(WidgetId id);
   void SetValue(WidgetId id, float value);
@@ -254,6 +262,7 @@ public:
     std::optional<u32> text_color;
     std::optional<u32> bg_color;
     std::string style;
+    std::string group;
     bool visible;
   };
   struct WindowInfo
@@ -265,6 +274,7 @@ public:
     std::optional<u32> bg_color;
     std::string style;
     bool canvas = false;
+    bool hardware_canvas = false;
     int canvas_w = 0, canvas_h = 0;
     bool overlay = false;
   };

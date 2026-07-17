@@ -33,24 +33,6 @@
 static constexpr int POLL_INTERVAL_MS = 16;
 static constexpr int HOST_UPDATE_INTERVAL_MS = 33;
 
-static bool IsTpCollisionViewer(const std::string& title)
-{
-  return title == "TP Collision + Trigger Viewer";
-}
-
-static bool IsTpTriggerControl(const std::string& label)
-{
-  return label == "Load zones" || label == "Event areas" || label == "Switch areas" ||
-         label == "Restart changes" || label == "Other Triggers" || label == "Filled triggers" ||
-         label == "On Top Triggers";
-}
-
-static bool IsTpColliderControl(const std::string& label)
-{
-  return label == "Push colliders" || label == "Attack colliders" ||
-         label == "Coordinate Dot";
-}
-
 // ARGB colors become rgba() QSS fragments; the raw style is appended last so it wins on conflict.
 static QString BuildStyleSheet(const std::optional<u32>& text_color,
                                const std::optional<u32>& bg_color, const std::string& style)
@@ -85,17 +67,16 @@ ScriptWindowManager::ScriptWindowManager(QObject* parent) : QObject(parent)
   connect(&m_timer, &QTimer::timeout, this, &ScriptWindowManager::Sync);
   m_timer.start(POLL_INTERVAL_MS);
 
-  // Let canvases process camera input while emulation is paused.  RunOnCPUThread
-  // performs the required pause lock and executes Python on its owning CPU
-  // thread; calling the event hub from Qt was the source of the prior crashes.
+  // HostUpdate is the detached-script UI heartbeat. Run every callback through
+  // the CPU-thread queue, whether emulation is running or paused. This gives
+  // canvas scripts one serialized execution model for drawing, input and
+  // memory-adjacent state instead of mixing a frame-thread callback with a
+  // paused-only Qt timer.
   connect(&m_host_update_timer, &QTimer::timeout, this, [pending = m_host_update_pending] {
     if (Scripts::IsConstructing())
       return;
 
     Core::System& system = Core::System::GetInstance();
-    if (Core::GetState(system) != Core::State::Paused)
-      return;
-
     if (pending->exchange(true))
       return;
 
@@ -130,35 +111,17 @@ void ScriptWindowManager::Sync()
     QGuiApplication::clipboard()->setText(QString::fromStdString(clipboard_text));
 
   const std::vector<API::Gui::WindowInfo> snapshots = gui.SnapshotDetachedWindows();
-  std::optional<API::Gui::WidgetId> tp_viewer_id;
-  for (const auto& snapshot : snapshots)
-  {
-    if (IsTpCollisionViewer(snapshot.title) && !tp_viewer_id)
-      tp_viewer_id = snapshot.id;
-  }
-  const auto is_duplicate_tp_viewer = [&](API::Gui::WidgetId id) {
-    if (!tp_viewer_id || id == *tp_viewer_id)
-      return false;
-    const auto it = std::find_if(snapshots.begin(), snapshots.end(),
-                                 [id](const API::Gui::WindowInfo& snapshot) {
-                                   return snapshot.id == id;
-                                 });
-    return it != snapshots.end() && IsTpCollisionViewer(it->title);
-  };
-
   // Remove Qt windows whose tree node is gone.
   std::erase_if(m_windows, [&](auto& kv) {
     bool gone = std::none_of(snapshots.begin(), snapshots.end(),
                              [id = kv.first](const API::Gui::WindowInfo& s) { return s.id == id; });
-    if (gone || is_duplicate_tp_viewer(kv.first))
+    if (gone)
       delete kv.second.window;
-    return gone || is_duplicate_tp_viewer(kv.first);
+    return gone;
   });
 
   for (const auto& snap : snapshots)
   {
-    if (is_duplicate_tp_viewer(snap.id))
-      continue;
     auto it = m_windows.find(snap.id);
 
     // Overlay canvas: a frameless stays-on-top top-level surface with no form children.
@@ -191,42 +154,49 @@ void ScriptWindowManager::Sync()
       auto* root = new QVBoxLayout(win);
       root->setContentsMargins(8, 8, 8, 8);
       root->setSpacing(6);
-      const bool tp_collision_layout = IsTpCollisionViewer(snap.title);
+      std::vector<std::string> groups;
+      for (const auto& child : snap.children)
+      {
+        if (!child.group.empty() &&
+            std::find(groups.begin(), groups.end(), child.group) == groups.end())
+          groups.push_back(child.group);
+      }
+      const bool grouped_layout = !groups.empty();
       auto* scroll = new QScrollArea(win);
       scroll->setWidgetResizable(true);
       scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
       scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
-      if (tp_collision_layout)
+      if (grouped_layout)
       {
         scroll->setMinimumHeight(410);
         scroll->setMaximumHeight(455);
       }
       auto* controls = new QWidget(scroll);
       QVBoxLayout* controls_layout = nullptr;
-      QVBoxLayout* trigger_layout = nullptr;
-      QVBoxLayout* collider_layout = nullptr;
-      if (tp_collision_layout)
+      std::map<std::string, QVBoxLayout*> group_layouts;
+      if (grouped_layout)
       {
         auto* columns = new QHBoxLayout(controls);
         columns->setContentsMargins(4, 4, 4, 4);
         columns->setSpacing(8);
-        auto* viewer_group = new QGroupBox(QStringLiteral("Collision and View"), controls);
+        auto* primary_group = new QGroupBox(QString::fromStdString(groups.front()), controls);
         auto* side_column = new QWidget(controls);
         auto* side_layout = new QVBoxLayout(side_column);
-        auto* trigger_group = new QGroupBox(QStringLiteral("Triggers"), controls);
-        auto* collider_group = new QGroupBox(QStringLiteral("Colliders"), controls);
-        controls_layout = new QVBoxLayout(viewer_group);
-        trigger_layout = new QVBoxLayout(trigger_group);
-        collider_layout = new QVBoxLayout(collider_group);
+        controls_layout = new QVBoxLayout(primary_group);
+        group_layouts.emplace(groups.front(), controls_layout);
         controls_layout->setAlignment(Qt::AlignTop);
-        trigger_layout->setAlignment(Qt::AlignTop);
-        collider_layout->setAlignment(Qt::AlignTop);
         side_layout->setContentsMargins(0, 0, 0, 0);
         side_layout->setSpacing(8);
-        side_layout->addWidget(trigger_group);
-        side_layout->addWidget(collider_group);
+        for (size_t group_index = 1; group_index < groups.size(); ++group_index)
+        {
+          auto* group = new QGroupBox(QString::fromStdString(groups[group_index]), controls);
+          auto* layout = new QVBoxLayout(group);
+          layout->setAlignment(Qt::AlignTop);
+          group_layouts.emplace(groups[group_index], layout);
+          side_layout->addWidget(group);
+        }
         side_layout->addStretch();
-        columns->addWidget(viewer_group, 3);
+        columns->addWidget(primary_group, 3);
         columns->addWidget(side_column, 2);
       }
       else
@@ -235,56 +205,61 @@ void ScriptWindowManager::Sync()
         controls_layout->setAlignment(Qt::AlignTop);
       }
       scroll->setWidget(controls);
-      // The TP viewport is the primary surface. The controls retain a usable
+      // Grouped hardware tools retain a usable
       // fixed-height, scrollable panel beneath it instead of consuming every
       // extra pixel when the detached window is enlarged.
       root->addWidget(scroll, 0);
       if (snap.text_color || snap.bg_color || !snap.style.empty())
         win->setStyleSheet(BuildStyleSheet(snap.text_color, snap.bg_color, snap.style));
-      win->resize(tp_collision_layout ? 1200 : 720, tp_collision_layout ? 1180 : 640);
+      win->resize(grouped_layout ? 1200 : 720, grouped_layout ? 1180 : 640);
       win->show();
-      m_windows[snap.id] = ManagedWindow{snap.id, win, {}, nullptr, nullptr, nullptr, root,
-                                          controls_layout, trigger_layout, collider_layout, controls,
-                                          scroll, tp_collision_layout};
+      ManagedWindow managed{};
+      managed.id = snap.id;
+      managed.window = win;
+      managed.root_layout = root;
+      managed.controls_layout = controls_layout;
+      managed.group_layouts = std::move(group_layouts);
+      managed.controls_host = controls;
+      managed.controls_scroll = scroll;
+      managed.grouped_layout = grouped_layout;
+      m_windows.emplace(snap.id, std::move(managed));
       it = m_windows.find(snap.id);
     }
 
     ManagedWindow& mw = it->second;
 
-    // The TP viewer owns a native D3D child. Keep the host alive independently
-    // of the CPU fallback canvas: GPU mode must not leave a second native
-    // painting surface beneath it.
+    // Each canvas receives a stable host widget. Hardware canvases additionally
+    // need a native, opaque host because their renderer presents directly to a
+    // platform surface. Keeping those attributes off regular QPainter canvases
+    // preserves normal backing-store updates for all existing script tools.
     if (snap.canvas && !mw.canvas_host)
     {
       auto* canvas_host = new QWidget(mw.window);
-      // The TP renderer is a native D3D child. Make its immediate host native
-      // and opaque as well so Qt never briefly repaints a backing surface over
-      // the viewport while processing a resize or a stale script snapshot.
-      canvas_host->setAttribute(Qt::WA_NativeWindow);
-      canvas_host->setAttribute(Qt::WA_OpaquePaintEvent);
-      canvas_host->setAttribute(Qt::WA_NoSystemBackground);
+      if (snap.hardware_canvas)
+      {
+        // The renderer is a native child. Make its immediate host native and
+        // opaque as well so Qt never repaints a backing surface over it.
+        canvas_host->setAttribute(Qt::WA_NativeWindow);
+        canvas_host->setAttribute(Qt::WA_OpaquePaintEvent);
+        canvas_host->setAttribute(Qt::WA_NoSystemBackground);
+      }
       auto* canvas_layout = new QStackedLayout(canvas_host);
       canvas_layout->setContentsMargins(0, 0, 0, 0);
       canvas_layout->setStackingMode(QStackedLayout::StackAll);
-      if (mw.tp_collision_layout)
+      if (snap.hardware_canvas)
       {
         auto* hardware = new ScriptHardwareMeshWidget(snap.id, canvas_host);
         canvas_layout->addWidget(hardware);
         mw.hardware_mesh = hardware;
       }
-      mw.root_layout->insertWidget(0, canvas_host, mw.tp_collision_layout ? 1 : 0);
+      mw.root_layout->insertWidget(0, canvas_host, mw.grouped_layout ? 1 : 0);
       mw.canvas_host = canvas_host;
     }
 
     const auto hardware_snapshot =
         mw.hardware_mesh ? gui.SnapshotHardwareMesh(snap.id) : API::Gui::HardwareSnapshot{};
-    // The TP collision viewer is deliberately GPU-only. A one-tick false
-    // state while a save state or room transition is being observed must not
-    // resurrect the CPU canvas beneath the D3D child, which was the remaining
-    // source of visible viewport/options flicker.
-    const bool use_hardware = mw.hardware_mesh &&
-                              (hardware_snapshot.state.enabled || mw.tp_collision_layout);
-    if (mw.tp_collision_layout && mw.controls_scroll &&
+    const bool use_hardware = mw.hardware_mesh && hardware_snapshot.state.enabled;
+    if (mw.grouped_layout && mw.controls_scroll &&
         mw.viewer_fullscreen != hardware_snapshot.state.fullscreen)
     {
       mw.controls_scroll->setVisible(!hardware_snapshot.state.fullscreen);
@@ -320,10 +295,9 @@ void ScriptWindowManager::Sync()
     if (mw.hardware_mesh)
     {
       mw.hardware_mesh->SetSnapshot(hardware_snapshot);
-      // Two native child windows cannot alpha-compose reliably on Windows.
-      // Normal GPU mode therefore puts the D3D surface on top; it forwards
-      // freecam/picking input into the shared script canvas state. CPU vertex
-      // mode puts the canvas on top so its detailed selection UI remains visible.
+      // Native child surfaces cannot alpha-compose reliably with QWidget
+      // siblings on every platform. The active hardware surface stays on top
+      // and forwards its input through the shared canvas state.
       if (use_hardware)
       {
         if (!mw.hardware_visibility_initialized || !mw.hardware_active)
@@ -360,10 +334,12 @@ void ScriptWindowManager::Sync()
       QWidget* w = nullptr;
       QWidget* caption = nullptr;
       QVBoxLayout* destination = mw.controls_layout;
-      if (mw.tp_collision_layout && IsTpTriggerControl(child.label))
-        destination = mw.trigger_layout;
-      else if (mw.tp_collision_layout && IsTpColliderControl(child.label))
-        destination = mw.collider_layout;
+      if (!child.group.empty())
+      {
+        const auto group_it = mw.group_layouts.find(child.group);
+        if (group_it != mw.group_layouts.end())
+          destination = group_it->second;
+      }
       switch (child.kind)
       {
       case API::Gui::WidgetKind::Button:

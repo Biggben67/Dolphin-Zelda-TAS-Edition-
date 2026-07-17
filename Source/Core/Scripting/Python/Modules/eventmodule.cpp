@@ -67,6 +67,7 @@ using EventModuleState = GenericEventModuleState<
   API::Events::HostUpdate,
   API::Events::FrameDrawn,
   API::Events::MemoryBreakpoint,
+  API::Events::MemoryWatch,
   API::Events::CodeBreakpoint,
   API::Events::SaveStateSave,
   API::Events::SaveStateLoad
@@ -247,6 +248,10 @@ static const std::tuple<bool, u32, u64> PyMemoryBreakpoint(const API::Events::Me
 {
   return std::make_tuple(evt.write, evt.addr, evt.value);
 }
+static const std::tuple<bool, u32, u64> PyMemoryWatch(const API::Events::MemoryWatch& evt)
+{
+  return std::make_tuple(evt.write, evt.addr, evt.value);
+}
 static const std::tuple<u32> PyCodeBreakpoint(const API::Events::CodeBreakpoint& evt)
 {
   return std::make_tuple(evt.addr);
@@ -265,6 +270,7 @@ using PyFrameAdvanceEvent = PyEventFromMappingFunc<PyFrameAdvance>;
 using PyHostUpdateEvent = PyEventFromMappingFunc<PyHostUpdate>;
 using PyFrameDrawnEvent = PyEventFromMappingFunc<PyFrameDrawn>;
 using PyMemoryBreakpointEvent = PyEventFromMappingFunc<PyMemoryBreakpoint>;
+using PyMemoryWatchEvent = PyEventFromMappingFunc<PyMemoryWatch>;
 using PyCodeBreakpointEvent = PyEventFromMappingFunc<PyCodeBreakpoint>;
 using PySaveStateSaveEvent = PyEventFromMappingFunc<PySaveStateSave>;
 using PySaveStateLoadEvent = PyEventFromMappingFunc<PySaveStateLoad>;
@@ -277,6 +283,7 @@ using EventTuple = std::tuple<
   PyHostUpdateEvent,
   PyFrameDrawnEvent,
   PyMemoryBreakpointEvent,
+  PyMemoryWatchEvent,
   PyCodeBreakpointEvent,
   PySaveStateSaveEvent,
   PySaveStateLoadEvent
@@ -286,6 +293,7 @@ using EventContainer = PythonEventContainer<
   PyHostUpdateEvent,
   PyFrameDrawnEvent,
   PyMemoryBreakpointEvent,
+  PyMemoryWatchEvent,
   PyCodeBreakpointEvent,
   PySaveStateSaveEvent,
   PySaveStateLoadEvent
@@ -303,6 +311,7 @@ std::optional<CoroutineScheduler> GetCoroutineScheduler(std::string aeventname)
       {"hostupdate", PyHostUpdateEvent::ScheduleCoroutine},
       {"framedrawn", PyFrameDrawnEvent::ScheduleCoroutine},
       {"memorybreakpoint", PyMemoryBreakpointEvent::ScheduleCoroutine},
+      {"memorywatch", PyMemoryWatchEvent::ScheduleCoroutine},
       {"codebreakpoint", PyCodeBreakpointEvent::ScheduleCoroutine},
       {"savestatesave", PySaveStateSaveEvent::ScheduleCoroutine},
       {"savestateload", PySaveStateLoadEvent::ScheduleCoroutine},
@@ -332,6 +341,9 @@ async def hostupdate():
 
 async def memorybreakpoint():
     return (await _DolphinAsyncEvent("memorybreakpoint"))
+
+async def memorywatch():
+    return (await _DolphinAsyncEvent("memorywatch"))
 
 async def codebreakpoint():
     return (await _DolphinAsyncEvent("codebreakpoint"))
@@ -389,6 +401,7 @@ PyMODINIT_FUNC PyInit_event()
       Py::MakeMethodDef<PyHostUpdateEvent::SetCallback>("on_hostupdate"),
       Py::MakeMethodDef<PyFrameDrawnEvent::SetCallback>("on_framedrawn"),
       Py::MakeMethodDef<PyMemoryBreakpointEvent::SetCallback>("on_memorybreakpoint"),
+      Py::MakeMethodDef<PyMemoryWatchEvent::SetCallback>("on_memorywatch"),
       Py::MakeMethodDef<PyCodeBreakpointEvent::SetCallback>("on_codebreakpoint"),
       Py::MakeMethodDef<PySaveStateSaveEvent::SetCallback>("on_savestatesave"),
       Py::MakeMethodDef<PySaveStateLoadEvent::SetCallback>("on_savestateload"),

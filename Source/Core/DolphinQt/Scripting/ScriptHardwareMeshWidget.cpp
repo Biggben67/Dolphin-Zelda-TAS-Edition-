@@ -8,6 +8,7 @@
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QResizeEvent>
+#include <QString>
 #include <QWheelEvent>
 
 #ifdef _WIN32
@@ -114,11 +115,9 @@ void main(line VSOut input[2], inout TriangleStream<GSOut> stream) {
   float2 p1 = input[1].position.xy / input[1].position.w;
   float2 delta = (p1 - p0) * float2(viewport_flags.x, viewport_flags.y);
   float length_pixels = max(length(delta), 0.001);
-  // 2px each side of the centre line keeps normal trigger/push outlines
-  // readable. The red displacement-clip overlay uses 4px so its segmented
-  // safe seam remains visible over dense collision wireframes.
-  const float half_width =
-      (input[0].color.r > 0.9 && input[0].color.g < 0.3 && input[0].color.b < 0.3) ? 4.0 : 2.0;
+  // Expand every line consistently in screen space. Mesh groups deliberately
+  // carry no tool-specific color or feature semantics.
+  const float half_width = 2.0;
   const float2 offset = float2(-delta.y, delta.x) / length_pixels * half_width /
                         float2(viewport_flags.x, viewport_flags.y);
   GSOut output;
@@ -171,12 +170,9 @@ struct ScriptHardwareMeshWidget::Resources
   ComPtr<ID3D11BlendState> no_color_blend;
   ComPtr<ID2D1Factory> d2d_factory;
   ComPtr<IDWriteFactory> dwrite_factory;
-  ComPtr<IDWriteTextFormat> overlay_format;
-  ComPtr<ID2D1RenderTarget> overlay_target;
-  ComPtr<ID2D1SolidColorBrush> overlay_text;
-  ComPtr<ID2D1SolidColorBrush> overlay_background;
-  ComPtr<ID2D1SolidColorBrush> overlay_border;
-  ComPtr<ID2D1SolidColorBrush> overlay_button;
+  ComPtr<IDWriteTextFormat> hud_format;
+  ComPtr<ID2D1RenderTarget> hud_target;
+  ComPtr<ID2D1SolidColorBrush> hud_brush;
 };
 
 namespace
@@ -411,8 +407,9 @@ bool ScriptHardwareMeshWidget::EnsureResources()
     ReleaseResources();
     return false;
   }
-  // The vertex-selection panel is drawn directly onto the D3D backbuffer by
-  // Direct2D. This retains crisp text without reintroducing a second Qt HWND.
+  // The script HUD is drawn directly onto the D3D backbuffer by
+  // Direct2D. This keeps screen space UI above the mesh without a second Qt
+  // child window or renderer specific panel code.
   D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, __uuidof(ID2D1Factory), nullptr,
                     reinterpret_cast<void**>(m_resources->d2d_factory.GetAddressOf()));
   if (m_resources->d2d_factory &&
@@ -421,7 +418,7 @@ bool ScriptHardwareMeshWidget::EnsureResources()
   {
     m_resources->dwrite_factory->CreateTextFormat(
         L"Consolas", nullptr, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
-        DWRITE_FONT_STRETCH_NORMAL, 14.0f, L"en-us", &m_resources->overlay_format);
+        DWRITE_FONT_STRETCH_NORMAL, 14.0f, L"en-us", &m_resources->hud_format);
   }
   D3D11_RASTERIZER_DESC raster{};
   raster.FillMode = D3D11_FILL_SOLID;
@@ -501,11 +498,8 @@ void ScriptHardwareMeshWidget::RecreateTargets()
   r.msaa_color.Reset();
   r.msaa_depth.Reset();
   r.msaa_depth_texture.Reset();
-  r.overlay_button.Reset();
-  r.overlay_border.Reset();
-  r.overlay_background.Reset();
-  r.overlay_text.Reset();
-  r.overlay_target.Reset();
+  r.hud_brush.Reset();
+  r.hud_target.Reset();
   if (FAILED(r.swap_chain->ResizeBuffers(0, width(), height(), DXGI_FORMAT_UNKNOWN, 0)))
     return;
   if (FAILED(r.swap_chain->GetBuffer(0, IID_PPV_ARGS(&r.backbuffer))) ||
@@ -545,7 +539,7 @@ void ScriptHardwareMeshWidget::RecreateTargets()
   if (FAILED(r.device->CreateTexture2D(&depth_desc, nullptr, &r.depth_texture)) ||
       FAILED(r.device->CreateDepthStencilView(r.depth_texture.Get(), nullptr, &r.depth)))
     return;
-  if (r.d2d_factory && r.overlay_format)
+  if (r.d2d_factory && r.hud_format)
   {
     ComPtr<IDXGISurface> surface;
     const D2D1_RENDER_TARGET_PROPERTIES properties =
@@ -554,12 +548,9 @@ void ScriptHardwareMeshWidget::RecreateTargets()
                                                        D2D1_ALPHA_MODE_IGNORE));
     if (SUCCEEDED(r.backbuffer.As(&surface)) &&
         SUCCEEDED(r.d2d_factory->CreateDxgiSurfaceRenderTarget(surface.Get(), &properties,
-                                                                 &r.overlay_target)))
+                                                                 &r.hud_target)))
     {
-      r.overlay_target->CreateSolidColorBrush(D2D1::ColorF(0.89f, 0.91f, 0.94f), &r.overlay_text);
-      r.overlay_target->CreateSolidColorBrush(D2D1::ColorF(0.063f, 0.169f, 0.31f), &r.overlay_background);
-      r.overlay_target->CreateSolidColorBrush(D2D1::ColorF(0.12f, 0.56f, 1.0f), &r.overlay_border);
-      r.overlay_target->CreateSolidColorBrush(D2D1::ColorF(0.10f, 0.31f, 0.53f), &r.overlay_button);
+      r.hud_target->CreateSolidColorBrush(D2D1::ColorF(1.0f, 1.0f, 1.0f), &r.hud_brush);
     }
   }
   m_targets_dirty = false;
@@ -754,6 +745,23 @@ void ScriptHardwareMeshWidget::Render()
     r.context->RSSetState(r.solid_rasterizer.Get());
     draw_triangles(0, 5);
   }
+  // Group 7 is a retained fill-only overlay layer. Draw it before the scene
+  // wire pass and write its depth in normal mode: its explicitly submitted
+  // line group remains visible, while unrelated mesh wire edges cannot show
+  // through triangulated faces. This is useful for any script drawn volume,
+  // not just collision viewers.
+  if (r.vertex_buffers[7] && r.vertex_counts[7] != 0 && s.fill_opacity > 0.0f &&
+      !(s.debug_on_top || s.xray))
+  {
+    constants.viewport_flags[2] = s.fill_opacity;
+    constants.viewport_flags[3] = 0.0f;
+    r.context->UpdateSubresource(r.constants.Get(), 0, nullptr, &constants, 0, 0);
+    r.context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    r.context->RSSetState(r.solid_rasterizer.Get());
+    r.context->OMSetDepthStencilState(r.depth_write.Get(), 0);
+    r.context->IASetVertexBuffers(0, 1, r.vertex_buffers[7].GetAddressOf(), &stride, &offset);
+    r.context->Draw(r.vertex_counts[7], 0);
+  }
   if (s.wireframe && s.wire_opacity > 0.0f)
   {
     constants.viewport_flags[2] = s.wire_opacity;
@@ -762,10 +770,9 @@ void ScriptHardwareMeshWidget::Render()
     r.context->RSSetState(r.solid_rasterizer.Get());
     draw_triangles(0, 5);
   }
-  // Filled trigger and push-collider volumes are intentionally drawn after
-  // stage collision, with no depth rejection, so their matching outlines
-  // remain useful even when the volume sits inside a wall or floor.
-  if (r.vertex_buffers[7] && r.vertex_counts[7] != 0)
+  // On top/X-ray overlay fills are intentionally rendered after the scene.
+  if (r.vertex_buffers[7] && r.vertex_counts[7] != 0 && s.fill_opacity > 0.0f &&
+      (s.debug_on_top || s.xray))
   {
     constants.viewport_flags[2] = s.fill_opacity;
     constants.viewport_flags[3] = 0.0f;
@@ -776,8 +783,8 @@ void ScriptHardwareMeshWidget::Render()
     r.context->IASetVertexBuffers(0, 1, r.vertex_buffers[7].GetAddressOf(), &stride, &offset);
     r.context->Draw(r.vertex_counts[7], 0);
   }
-  // Push colliders and trigger bounds share the collision depth buffer rather
-  // than competing with a second native Qt window underneath the D3D surface.
+  // Group 5 is the retained line-list layer. It shares this scene's depth
+  // buffer instead of requiring a second native window.
   if (r.vertex_buffers[5] && r.vertex_counts[5] != 0)
   {
     constants.viewport_flags[2] = s.wire_opacity;
@@ -785,7 +792,7 @@ void ScriptHardwareMeshWidget::Render()
     r.context->UpdateSubresource(r.constants.Get(), 0, nullptr, &constants, 0, 0);
     r.context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_LINELIST);
     r.context->RSSetState(r.solid_rasterizer.Get());
-    // Debug volumes should remain inspectable even inside/behind the stage.
+    // The generic on-top mode leaves line data visible through the main mesh.
     r.context->OMSetDepthStencilState((s.debug_on_top || s.xray) ? r.depth_off.Get() : r.depth_read.Get(), 0);
     r.context->GSSetConstantBuffers(0, 1, r.constants.GetAddressOf());
     r.context->GSSetShader(r.line_geometry_shader.Get(), nullptr, 0);
@@ -807,90 +814,83 @@ void ScriptHardwareMeshWidget::Render()
   if (r.msaa_color)
     r.context->ResolveSubresource(r.backbuffer.Get(), 0, r.msaa_color.Get(), 0,
                                   DXGI_FORMAT_B8G8R8A8_UNORM);
-  if (r.overlay_target && !s.clean_capture)
+  if (r.hud_target && r.hud_brush && m_snapshot.hud && !s.clean_capture)
   {
-    // Direct2D acquires the swap-chain surface. Release the D3D output
-    // binding first, including the non-MSAA fallback where it is the same
-    // backbuffer resource.
     r.context->OMSetRenderTargets(0, nullptr, nullptr);
     r.context->Flush();
-    const auto& lines = s.overlay_lines;
-    const bool expanded = !lines[1].empty();
-    const float panel_width = expanded ? 420.0f : 158.0f;
-    const float x0 = static_cast<float>(width()) - panel_width - 10.0f;
-    const float x1 = static_cast<float>(width()) - 10.0f;
-    const float bottom = expanded ? 184.0f : 34.0f;
-    r.overlay_target->BeginDraw();
-    // Top-left fullscreen toggle. Drawn in the same D2D pass as the vertex
-    // panel so it stays above the GPU scene without a second Qt child widget.
-    constexpr float toggle_x = 8.0f;
-    constexpr float toggle_y = 8.0f;
-    constexpr float toggle_size = 34.0f;
-    r.overlay_target->FillRectangle(D2D1::RectF(toggle_x, toggle_y, toggle_x + toggle_size,
-                                                 toggle_y + toggle_size), r.overlay_background.Get());
-    r.overlay_target->DrawRectangle(D2D1::RectF(toggle_x, toggle_y, toggle_x + toggle_size,
-                                                 toggle_y + toggle_size), r.overlay_border.Get(), 2.0f);
-    const auto line = [&](float x0, float y0, float x1, float y1) {
-      r.overlay_target->DrawLine(D2D1::Point2F(x0, y0), D2D1::Point2F(x1, y1),
-                                 r.overlay_text.Get(), 2.0f);
+    const auto set_color = [&](u32 color) {
+      r.hud_brush->SetColor(D2D1::ColorF(((color >> 16) & 0xFF) / 255.0f,
+                                          ((color >> 8) & 0xFF) / 255.0f,
+                                          (color & 0xFF) / 255.0f,
+                                          ((color >> 24) & 0xFF) / 255.0f));
     };
-    if (s.fullscreen)
-    {
-      line(15.0f, 19.0f, 19.0f, 19.0f); line(15.0f, 19.0f, 15.0f, 15.0f);
-      line(35.0f, 19.0f, 31.0f, 19.0f); line(35.0f, 19.0f, 35.0f, 15.0f);
-      line(15.0f, 31.0f, 19.0f, 31.0f); line(15.0f, 31.0f, 15.0f, 35.0f);
-      line(35.0f, 31.0f, 31.0f, 31.0f); line(35.0f, 31.0f, 35.0f, 35.0f);
-    }
-    else
-    {
-      line(15.0f, 21.0f, 15.0f, 15.0f); line(15.0f, 15.0f, 21.0f, 15.0f);
-      line(35.0f, 21.0f, 35.0f, 15.0f); line(35.0f, 15.0f, 29.0f, 15.0f);
-      line(15.0f, 29.0f, 15.0f, 35.0f); line(15.0f, 35.0f, 21.0f, 35.0f);
-      line(35.0f, 29.0f, 35.0f, 35.0f); line(35.0f, 35.0f, 29.0f, 35.0f);
-    }
-    if (!lines[0].empty())
-    {
-      r.overlay_target->FillRectangle(D2D1::RectF(x0, 8.0f, x1, bottom), r.overlay_background.Get());
-      r.overlay_target->DrawRectangle(D2D1::RectF(x0, 8.0f, x1, bottom), r.overlay_border.Get(), 2.0f);
-      const auto draw_text = [&](const std::string& text, float x, float y) {
-        if (text.empty())
-          return;
-        const std::wstring wide(text.begin(), text.end());
-        r.overlay_target->DrawTextW(wide.c_str(), static_cast<UINT32>(wide.size()),
-                                    r.overlay_format.Get(), D2D1::RectF(x, y, x1 - 8.0f, y + 20.0f),
-                                    r.overlay_text.Get());
-      };
-      draw_text(lines[0], x0 + 10.0f, 14.0f);
-      if (expanded)
+    const auto draw_triangle = [&](const API::Gui::CanvasPrimitive& p, bool filled) {
+      ComPtr<ID2D1PathGeometry> geometry;
+      ComPtr<ID2D1GeometrySink> sink;
+      if (FAILED(r.d2d_factory->CreatePathGeometry(geometry.GetAddressOf())) ||
+          FAILED(geometry->Open(sink.GetAddressOf())))
+        return;
+      sink->BeginFigure(D2D1::Point2F(p.p0.x, p.p0.y),
+                        filled ? D2D1_FIGURE_BEGIN_FILLED : D2D1_FIGURE_BEGIN_HOLLOW);
+      const D2D1_POINT_2F points[] = {D2D1::Point2F(p.p1.x, p.p1.y), D2D1::Point2F(p.p2.x, p.p2.y)};
+      sink->AddLines(points, std::size(points));
+      sink->EndFigure(D2D1_FIGURE_END_CLOSED);
+      if (SUCCEEDED(sink->Close()))
       {
-        draw_text(lines[1], x0 + 10.0f, 38.0f);
-        draw_text(lines[2], x0 + 10.0f, 56.0f);
-        draw_text(lines[3], x0 + 10.0f, 74.0f);
-        if (!lines[4].empty())
-        {
-          r.overlay_target->FillRectangle(D2D1::RectF(x0 + 10.0f, 94.0f, x0 + 132.0f, 118.0f),
-                                          r.overlay_button.Get());
-          draw_text(lines[4], x0 + 26.0f, 99.0f);
-        }
-        draw_text(lines[5], x0 + 10.0f, 128.0f);
-        if (!lines[6].empty() || !lines[7].empty())
-        {
-          r.overlay_target->FillRectangle(D2D1::RectF(x0 + 10.0f, 146.0f, x0 + 113.0f, 170.0f),
-                                          r.overlay_button.Get());
-          r.overlay_target->FillRectangle(D2D1::RectF(x0 + 122.0f, 146.0f, x1 - 10.0f, 170.0f),
-                                          r.overlay_button.Get());
-          draw_text(lines[6], x0 + 36.0f, 151.0f);
-          draw_text(lines[7], x0 + 148.0f, 151.0f);
-        }
+        if (filled)
+          r.hud_target->FillGeometry(geometry.Get(), r.hud_brush.Get());
+        else
+          r.hud_target->DrawGeometry(geometry.Get(), r.hud_brush.Get(), p.thickness);
+      }
+    };
+    r.hud_target->BeginDraw();
+    for (const API::Gui::CanvasPrimitive& p : *m_snapshot.hud)
+    {
+      set_color(p.color);
+      switch (p.type)
+      {
+      case API::Gui::CanvasPrimitive::Type::Line:
+        r.hud_target->DrawLine(D2D1::Point2F(p.p0.x, p.p0.y), D2D1::Point2F(p.p1.x, p.p1.y),
+                               r.hud_brush.Get(), p.thickness);
+        break;
+      case API::Gui::CanvasPrimitive::Type::Rect:
+        r.hud_target->DrawRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(p.p0.x, p.p0.y, p.p1.x, p.p1.y),
+                                                              p.rounding, p.rounding), r.hud_brush.Get(), p.thickness);
+        break;
+      case API::Gui::CanvasPrimitive::Type::RectFilled:
+        r.hud_target->FillRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(p.p0.x, p.p0.y, p.p1.x, p.p1.y),
+                                                              p.rounding, p.rounding), r.hud_brush.Get());
+        break;
+      case API::Gui::CanvasPrimitive::Type::Circle:
+        r.hud_target->DrawEllipse(D2D1::Ellipse(D2D1::Point2F(p.p0.x, p.p0.y), p.radius, p.radius),
+                                  r.hud_brush.Get(), p.thickness);
+        break;
+      case API::Gui::CanvasPrimitive::Type::CircleFilled:
+        r.hud_target->FillEllipse(D2D1::Ellipse(D2D1::Point2F(p.p0.x, p.p0.y), p.radius, p.radius),
+                                  r.hud_brush.Get());
+        break;
+      case API::Gui::CanvasPrimitive::Type::Triangle:
+        draw_triangle(p, false);
+        break;
+      case API::Gui::CanvasPrimitive::Type::TriangleFilled:
+        draw_triangle(p, true);
+        break;
+      case API::Gui::CanvasPrimitive::Type::Text:
+      {
+        const std::wstring text = QString::fromUtf8(p.text.c_str()).toStdWString();
+        r.hud_target->DrawTextW(text.c_str(), static_cast<UINT32>(text.size()), r.hud_format.Get(),
+                                D2D1::RectF(p.p0.x, p.p0.y, static_cast<float>(width()), p.p0.y + 22.0f),
+                                r.hud_brush.Get());
+        break;
+      }
+      default:
+        break;
       }
     }
-    if (r.overlay_target->EndDraw() == D2DERR_RECREATE_TARGET)
+    if (r.hud_target->EndDraw() == D2DERR_RECREATE_TARGET)
     {
-      r.overlay_button.Reset();
-      r.overlay_border.Reset();
-      r.overlay_background.Reset();
-      r.overlay_text.Reset();
-      r.overlay_target.Reset();
+      r.hud_brush.Reset();
+      r.hud_target.Reset();
       m_targets_dirty = true;
     }
   }
@@ -909,7 +909,9 @@ void ScriptHardwareMeshWidget::ReleaseResources()
 #include <QEvent>
 #include <QOpenGLContext>
 #include <QOpenGLExtraFunctions>
+#include <QFontMetricsF>
 #include <QPainter>
+#include <QPolygonF>
 #include <QSurfaceFormat>
 #include <QWindow>
 
@@ -1258,8 +1260,7 @@ struct ScriptHardwareMeshWidget::Resources
   std::array<GLuint, 8> vertex_buffers{};
   std::array<GLsizei, 8> vertex_counts{};
   QSize overlay_size;
-  std::array<std::string, 8> overlay_lines{};
-  bool overlay_fullscreen = false;
+  std::shared_ptr<const std::vector<API::Gui::CanvasPrimitive>> overlay_hud;
   bool overlay_valid = false;
 };
 
@@ -1548,13 +1549,29 @@ void ScriptHardwareMeshWidget::Render()
       set_uniforms(r.triangle_program, s.fill_opacity, 0);
       draw_triangles(0, 5);
     }
+    // Group 7 is a depth-writing fill-only overlay in normal mode. Rendering
+    // it before scene wire prevents unrelated triangle edges appearing inside
+    // translucent scripted volumes; scripts submit their desired outer edges
+    // separately through group 5.
+    if (r.vertex_buffers[7] && r.vertex_counts[7] != 0 && s.fill_opacity > 0.0f &&
+        !(s.debug_on_top || s.xray))
+    {
+      r.gl->glEnable(GL_DEPTH_TEST);
+      r.gl->glDepthFunc(GL_LEQUAL);
+      r.gl->glDepthMask(GL_TRUE);
+      r.gl->glUseProgram(r.triangle_program);
+      set_uniforms(r.triangle_program, s.fill_opacity, 0);
+      draw_triangles(7, 8);
+      r.gl->glDepthMask(GL_FALSE);
+    }
     if (s.wireframe && s.wire_opacity > 0.0f)
     {
       r.gl->glUseProgram(r.triangle_program);
       set_uniforms(r.triangle_program, s.wire_opacity, 1);
       draw_triangles(0, 5);
     }
-    if (r.vertex_buffers[7] && r.vertex_counts[7] != 0)
+    if (r.vertex_buffers[7] && r.vertex_counts[7] != 0 && s.fill_opacity > 0.0f &&
+        (s.debug_on_top || s.xray))
     {
       if (s.debug_on_top || s.xray)
         r.gl->glDisable(GL_DEPTH_TEST);
@@ -1583,11 +1600,10 @@ void ScriptHardwareMeshWidget::Render()
       draw_triangles(6, 7);
     }
 
-    if (!s.clean_capture)
+    if (!s.clean_capture && m_snapshot.hud)
     {
       const bool overlay_changed = !r.overlay_valid || r.overlay_size != QSize(pixel_width, pixel_height) ||
-                                   r.overlay_lines != s.overlay_lines ||
-                                   r.overlay_fullscreen != s.fullscreen;
+                                   r.overlay_hud != m_snapshot.hud;
       if (overlay_changed)
       {
         QImage overlay(QSize(pixel_width, pixel_height), QImage::Format_RGBA8888);
@@ -1596,67 +1612,37 @@ void ScriptHardwareMeshWidget::Render()
         painter.setRenderHint(QPainter::Antialiasing);
         painter.setRenderHint(QPainter::TextAntialiasing);
         painter.setFont(QFont(QStringLiteral("Consolas"), 14));
-        const QColor text(227, 232, 240);
-        const QColor background(16, 43, 79);
-        const QColor border(31, 143, 255);
-        const QColor button(26, 79, 135);
-        const auto line = [&](float x0, float y0, float x1, float y1) {
-          painter.setPen(QPen(text, 2.0));
-          painter.drawLine(QPointF(x0, y0), QPointF(x1, y1));
+        const qreal dpr = devicePixelRatioF();
+        painter.scale(dpr, dpr);
+        const auto color = [](u32 argb) {
+          return QColor((argb >> 16) & 0xFF, (argb >> 8) & 0xFF, argb & 0xFF, (argb >> 24) & 0xFF);
         };
-        painter.setPen(QPen(border, 2.0));
-        painter.setBrush(background);
-        painter.drawRect(QRectF(8.0, 8.0, 34.0, 34.0));
-        if (s.fullscreen)
+        for (const API::Gui::CanvasPrimitive& p : *m_snapshot.hud)
         {
-          line(15.0, 19.0, 19.0, 19.0); line(15.0, 19.0, 15.0, 15.0);
-          line(35.0, 19.0, 31.0, 19.0); line(35.0, 19.0, 35.0, 15.0);
-          line(15.0, 31.0, 19.0, 31.0); line(15.0, 31.0, 15.0, 35.0);
-          line(35.0, 31.0, 31.0, 31.0); line(35.0, 31.0, 35.0, 35.0);
-        }
-        else
-        {
-          line(15.0, 21.0, 15.0, 15.0); line(15.0, 15.0, 21.0, 15.0);
-          line(35.0, 21.0, 35.0, 15.0); line(35.0, 15.0, 29.0, 15.0);
-          line(15.0, 29.0, 15.0, 35.0); line(15.0, 35.0, 21.0, 35.0);
-          line(35.0, 29.0, 35.0, 35.0); line(35.0, 35.0, 29.0, 35.0);
-        }
-        const auto& lines = s.overlay_lines;
-        if (!lines[0].empty())
-        {
-          const bool expanded = !lines[1].empty();
-          const float panel_width = expanded ? 420.0f : 158.0f;
-          const float x0 = static_cast<float>(pixel_width) - panel_width - 10.0f;
-          const float x1 = static_cast<float>(pixel_width) - 10.0f;
-          const float bottom = expanded ? 184.0f : 34.0f;
-          painter.setPen(QPen(border, 2.0));
-          painter.setBrush(background);
-          painter.drawRect(QRectF(x0, 8.0, x1 - x0, bottom - 8.0));
-          painter.setPen(text);
-          const auto draw_text = [&](const std::string& value, float x, float y) {
-            if (!value.empty())
-              painter.drawText(QRectF(x, y, x1 - x - 8.0f, 20.0), Qt::AlignLeft | Qt::AlignVCenter,
-                               QString::fromStdString(value));
-          };
-          draw_text(lines[0], x0 + 10.0f, 14.0f);
-          if (expanded)
+          const QColor c = color(p.color);
+          switch (p.type)
           {
-            draw_text(lines[1], x0 + 10.0f, 38.0f);
-            draw_text(lines[2], x0 + 10.0f, 56.0f);
-            draw_text(lines[3], x0 + 10.0f, 74.0f);
-            if (!lines[4].empty())
-            {
-              painter.fillRect(QRectF(x0 + 10.0f, 94.0f, 122.0f, 24.0f), button);
-              draw_text(lines[4], x0 + 26.0f, 99.0f);
-            }
-            draw_text(lines[5], x0 + 10.0f, 128.0f);
-            if (!lines[6].empty() || !lines[7].empty())
-            {
-              painter.fillRect(QRectF(x0 + 10.0f, 146.0f, 103.0f, 24.0f), button);
-              painter.fillRect(QRectF(x0 + 122.0f, 146.0f, x1 - x0 - 132.0f, 24.0f), button);
-              draw_text(lines[6], x0 + 36.0f, 151.0f);
-              draw_text(lines[7], x0 + 148.0f, 151.0f);
-            }
+          case API::Gui::CanvasPrimitive::Type::Line:
+            painter.setPen(QPen(c, p.thickness)); painter.drawLine(QPointF(p.p0.x, p.p0.y), QPointF(p.p1.x, p.p1.y)); break;
+          case API::Gui::CanvasPrimitive::Type::Rect:
+            painter.setPen(QPen(c, p.thickness)); painter.setBrush(Qt::NoBrush); painter.drawRoundedRect(QRectF(p.p0.x, p.p0.y, p.p1.x - p.p0.x, p.p1.y - p.p0.y), p.rounding, p.rounding); break;
+          case API::Gui::CanvasPrimitive::Type::RectFilled:
+            painter.setPen(Qt::NoPen); painter.setBrush(c); painter.drawRoundedRect(QRectF(p.p0.x, p.p0.y, p.p1.x - p.p0.x, p.p1.y - p.p0.y), p.rounding, p.rounding); break;
+          case API::Gui::CanvasPrimitive::Type::Circle:
+            painter.setPen(QPen(c, p.thickness)); painter.setBrush(Qt::NoBrush); painter.drawEllipse(QPointF(p.p0.x, p.p0.y), p.radius, p.radius); break;
+          case API::Gui::CanvasPrimitive::Type::CircleFilled:
+            painter.setPen(Qt::NoPen); painter.setBrush(c); painter.drawEllipse(QPointF(p.p0.x, p.p0.y), p.radius, p.radius); break;
+          case API::Gui::CanvasPrimitive::Type::Triangle:
+            painter.setPen(QPen(c, p.thickness)); painter.setBrush(Qt::NoBrush); painter.drawPolygon(QPolygonF{QPointF(p.p0.x, p.p0.y), QPointF(p.p1.x, p.p1.y), QPointF(p.p2.x, p.p2.y)}); break;
+          case API::Gui::CanvasPrimitive::Type::TriangleFilled:
+            painter.setPen(Qt::NoPen); painter.setBrush(c); painter.drawPolygon(QPolygonF{QPointF(p.p0.x, p.p0.y), QPointF(p.p1.x, p.p1.y), QPointF(p.p2.x, p.p2.y)}); break;
+          case API::Gui::CanvasPrimitive::Type::Text:
+            painter.setPen(c);
+            painter.drawText(QPointF(p.p0.x, p.p0.y + QFontMetricsF(painter.font()).ascent()),
+                             QString::fromUtf8(p.text.c_str()));
+            break;
+          default:
+            break;
           }
         }
         painter.end();
@@ -1665,8 +1651,7 @@ void ScriptHardwareMeshWidget::Render()
         r.gl->glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, pixel_width, pixel_height, 0, GL_RGBA,
                            GL_UNSIGNED_BYTE, overlay.constBits());
         r.overlay_size = QSize(pixel_width, pixel_height);
-        r.overlay_lines = s.overlay_lines;
-        r.overlay_fullscreen = s.fullscreen;
+        r.overlay_hud = m_snapshot.hud;
         r.overlay_valid = true;
       }
       // QImage stores its first row at the top while OpenGL texture row zero

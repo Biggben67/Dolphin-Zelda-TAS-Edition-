@@ -39,13 +39,17 @@ struct TMemCheck
 
   bool log_on_hit = false;
   bool break_on_hit = false;
+  // Emit a non-pausing scripting event when this check matches. This is kept
+  // separate from break_on_hit so tools can observe transient game state.
+  bool notify_on_hit = false;
 
   u32 num_hits = 0;
 
   std::optional<Expression> condition;
 
-  // returns whether to break
-  bool Action(Core::System& system, u64 value, u32 addr, bool write, size_t size, u32 pc);
+  // Returns whether to break and reports whether a non-pausing observer matched.
+  bool Action(Core::System& system, u64 value, u32 addr, bool write, size_t size, u32 pc,
+              bool* notify);
 };
 
 // Code breakpoints.

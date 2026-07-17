@@ -20,9 +20,9 @@ class QResizeEvent;
 class QWheelEvent;
 class ScriptHardwareMeshWindow;
 
-// Native GPU surface used only by the TP collision viewer. On Windows this
-// uses the existing Direct3D surface; other platforms use a QtGui OpenGL
-// surface. Both paths retain collision vertices on the GPU.
+// Native GPU surface requested by a script through gui.Window.enable_hardware_canvas().
+// On Windows this uses Direct3D; other platforms use a QtGui OpenGL surface.
+// Both paths retain submitted mesh vertices on the GPU.
 class ScriptHardwareMeshWidget final : public QWidget
 {
   Q_OBJECT
