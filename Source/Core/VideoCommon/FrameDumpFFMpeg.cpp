@@ -67,7 +67,7 @@ struct FrameDumpContext
 namespace
 {
 #if defined(AV_LEVEL_UNKNOWN)
-// FFmpeg 8 renamed the retired FF_LEVEL_UNKNOWN
+// FFmpeg 8 renamed the retired FF_LEVEL_UNKNOWN codec-level sentinel.
 constexpr int FFMPEG_LEVEL_UNKNOWN = AV_LEVEL_UNKNOWN;
 #else
 constexpr int FFMPEG_LEVEL_UNKNOWN = FF_LEVEL_UNKNOWN;

@@ -239,7 +239,7 @@ u64 Gui::CanvasGeneration(WidgetId id)
 
 void Gui::SetHardwareMesh(WidgetId id, size_t group, std::vector<HardwareVertex> vertices)
 {
-  if (group >= 8)
+  if (group >= HARDWARE_MESH_GROUP_COUNT)
     return;
   std::lock_guard lock(m_widget_mutex);
   const auto widget = m_widgets.find(id);

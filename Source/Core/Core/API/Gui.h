@@ -134,6 +134,9 @@ public:
     float x, y, z;
     u32 color;
   };
+  // Stable script-facing mesh-layer count. Slots 0-4 are scene triangles;
+  // the remaining slots have distinct retained overlay semantics below.
+  static constexpr size_t HARDWARE_MESH_GROUP_COUNT = 9;
   struct HardwareState
   {
     bool enabled = false;
@@ -151,11 +154,11 @@ public:
   };
   struct HardwareSnapshot
   {
-    // Eight script-addressable mesh slots. The renderer uses slots 0-4 as
-    // depth-writing triangles, slot 5 as a line list, slot 6 as triangles
-    // drawn above the depth buffer, and slot 7 as depth-tested overlay fills.
-    // This is a rendering contract, not a game or tool identity.
-    std::array<std::shared_ptr<const std::vector<HardwareVertex>>, 8> groups;
+    // Script-addressable mesh slots: 0-4 are depth-writing scene triangles,
+    // 5 is a depth-tested line list, 6 is above-scene triangles, 7 is
+    // depth-tested overlay fills, and 8 is an above-scene line list. This is
+    // a rendering contract, not a game or tool identity.
+    std::array<std::shared_ptr<const std::vector<HardwareVertex>>, HARDWARE_MESH_GROUP_COUNT> groups;
     // Script-owned screen-space HUD. The native renderer composites these
     // retained primitives after the world mesh, so no script needs a second
     // QWidget or a renderer-specific C++ overlay to draw an interface.

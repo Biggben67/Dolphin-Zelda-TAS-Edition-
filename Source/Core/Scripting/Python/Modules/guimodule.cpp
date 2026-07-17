@@ -415,7 +415,8 @@ static PyObject* canvas_hardware_mesh(PyObject* self, PyObject* args)
     return nullptr;
   }
   constexpr Py_ssize_t MAX_HARDWARE_VERTICES = 4'000'000;
-  const bool valid = group >= 0 && group < 8 && positions.len % 12 == 0 &&
+  const bool valid = group >= 0 && group < static_cast<int>(API::Gui::HARDWARE_MESH_GROUP_COUNT) &&
+                     positions.len % 12 == 0 &&
                      positions.len / 12 <= MAX_HARDWARE_VERTICES &&
                      colors.len == positions.len / 3;
   if (!valid)

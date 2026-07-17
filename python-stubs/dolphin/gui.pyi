@@ -139,9 +139,10 @@ class Canvas:
     def take_wheel(self) -> float: ...                              # accumulated wheel notches (+ = up), consumes
     # Hardware canvas only. positions are packed big/little-endian-independent float32 xyz bytes;
     # colors are packed ARGB u32 bytes. Groups 0-4 are depth-writing scene triangles, 5 is
-    # retained lines, 6 is above-scene triangles, and 7 is a fill-only overlay layer. In normal
-    # depth mode, group 7 writes depth before the scene wire pass; submit its visible outlines
-    # explicitly through group 5. `debug_on_top`/`xray` instead renders group 7 above the scene.
+    # depth-tested retained lines, 6 is above-scene triangles, 7 is a fill-only overlay layer,
+    # and 8 is an always-on-top retained line list. Group 7 is depth-tested without writing depth
+    # in normal mode, allowing translucent scripted volumes to reveal the scene behind them.
+    # `debug_on_top`/`xray` instead renders group 7 above the scene.
     def hardware_mesh(self, group: int, positions: bytes, colors: bytes) -> None: ...
     def hardware_state(self, eye, right, up, forward, focal: float, radius: float,
                        fill_opacity: float, wire_opacity: float, filled: bool = True,

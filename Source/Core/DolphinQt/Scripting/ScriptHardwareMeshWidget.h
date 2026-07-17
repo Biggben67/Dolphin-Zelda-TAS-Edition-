@@ -57,7 +57,9 @@ private:
   void ReleaseResources();
 
   API::Gui::HardwareSnapshot m_snapshot;
-  std::array<std::shared_ptr<const std::vector<API::Gui::HardwareVertex>>, 8> m_uploaded_groups;
+  std::array<std::shared_ptr<const std::vector<API::Gui::HardwareVertex>>,
+             API::Gui::HARDWARE_MESH_GROUP_COUNT>
+      m_uploaded_groups;
   bool m_mesh_dirty = true;
   bool m_targets_dirty = true;
   bool m_ready = false;

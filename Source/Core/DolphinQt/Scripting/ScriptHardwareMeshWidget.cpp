@@ -159,8 +159,8 @@ struct ScriptHardwareMeshWidget::Resources
   ComPtr<ID3D11GeometryShader> line_geometry_shader;
   ComPtr<ID3D11InputLayout> input_layout;
   ComPtr<ID3D11Buffer> constants;
-  std::array<ComPtr<ID3D11Buffer>, 8> vertex_buffers;
-  std::array<UINT, 8> vertex_counts{};
+  std::array<ComPtr<ID3D11Buffer>, API::Gui::HARDWARE_MESH_GROUP_COUNT> vertex_buffers;
+  std::array<UINT, API::Gui::HARDWARE_MESH_GROUP_COUNT> vertex_counts{};
   ComPtr<ID3D11RasterizerState> solid_rasterizer;
   ComPtr<ID3D11RasterizerState> wire_rasterizer;
   ComPtr<ID3D11DepthStencilState> depth_write;
@@ -407,9 +407,9 @@ bool ScriptHardwareMeshWidget::EnsureResources()
     ReleaseResources();
     return false;
   }
-  // The script HUD is drawn directly onto the D3D backbuffer by
-  // Direct2D. This keeps screen space UI above the mesh without a second Qt
-  // child window or renderer specific panel code.
+  // The script-owned HUD is drawn directly onto the D3D backbuffer by
+  // Direct2D. This keeps screen-space UI above the mesh without a second Qt
+  // child window or renderer-specific panel code.
   D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, __uuidof(ID2D1Factory), nullptr,
                     reinterpret_cast<void**>(m_resources->d2d_factory.GetAddressOf()));
   if (m_resources->d2d_factory &&
@@ -745,23 +745,6 @@ void ScriptHardwareMeshWidget::Render()
     r.context->RSSetState(r.solid_rasterizer.Get());
     draw_triangles(0, 5);
   }
-  // Group 7 is a retained fill-only overlay layer. Draw it before the scene
-  // wire pass and write its depth in normal mode: its explicitly submitted
-  // line group remains visible, while unrelated mesh wire edges cannot show
-  // through triangulated faces. This is useful for any script drawn volume,
-  // not just collision viewers.
-  if (r.vertex_buffers[7] && r.vertex_counts[7] != 0 && s.fill_opacity > 0.0f &&
-      !(s.debug_on_top || s.xray))
-  {
-    constants.viewport_flags[2] = s.fill_opacity;
-    constants.viewport_flags[3] = 0.0f;
-    r.context->UpdateSubresource(r.constants.Get(), 0, nullptr, &constants, 0, 0);
-    r.context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-    r.context->RSSetState(r.solid_rasterizer.Get());
-    r.context->OMSetDepthStencilState(r.depth_write.Get(), 0);
-    r.context->IASetVertexBuffers(0, 1, r.vertex_buffers[7].GetAddressOf(), &stride, &offset);
-    r.context->Draw(r.vertex_counts[7], 0);
-  }
   if (s.wireframe && s.wire_opacity > 0.0f)
   {
     constants.viewport_flags[2] = s.wire_opacity;
@@ -770,9 +753,10 @@ void ScriptHardwareMeshWidget::Render()
     r.context->RSSetState(r.solid_rasterizer.Get());
     draw_triangles(0, 5);
   }
-  // On top/X-ray overlay fills are intentionally rendered after the scene.
-  if (r.vertex_buffers[7] && r.vertex_counts[7] != 0 && s.fill_opacity > 0.0f &&
-      (s.debug_on_top || s.xray))
+  // Group 7 is a retained fill-only overlay layer. It is depth-tested but
+  // does not write depth in normal mode, so translucent scripted volumes do
+  // not hide the scene behind them. On-top/X-ray renders it above the scene.
+  if (r.vertex_buffers[7] && r.vertex_counts[7] != 0 && s.fill_opacity > 0.0f)
   {
     constants.viewport_flags[2] = s.fill_opacity;
     constants.viewport_flags[3] = 0.0f;
@@ -792,12 +776,28 @@ void ScriptHardwareMeshWidget::Render()
     r.context->UpdateSubresource(r.constants.Get(), 0, nullptr, &constants, 0, 0);
     r.context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_LINELIST);
     r.context->RSSetState(r.solid_rasterizer.Get());
-    // The generic on-top mode leaves line data visible through the main mesh.
-    r.context->OMSetDepthStencilState((s.debug_on_top || s.xray) ? r.depth_off.Get() : r.depth_read.Get(), 0);
+    r.context->OMSetDepthStencilState(s.xray ? r.depth_off.Get() : r.depth_read.Get(), 0);
     r.context->GSSetConstantBuffers(0, 1, r.constants.GetAddressOf());
     r.context->GSSetShader(r.line_geometry_shader.Get(), nullptr, 0);
     r.context->IASetVertexBuffers(0, 1, r.vertex_buffers[5].GetAddressOf(), &stride, &offset);
     r.context->Draw(r.vertex_counts[5], 0);
+    r.context->GSSetShader(nullptr, nullptr, 0);
+  }
+  // Group 8 is an explicit above-scene line list. Keeping it separate from
+  // group 5 lets scripts place debug volumes on top without also turning the
+  // scene's regular wireframe into an X-ray view.
+  if (r.vertex_buffers[8] && r.vertex_counts[8] != 0)
+  {
+    constants.viewport_flags[2] = s.wire_opacity;
+    constants.viewport_flags[3] = 2.0f;
+    r.context->UpdateSubresource(r.constants.Get(), 0, nullptr, &constants, 0, 0);
+    r.context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_LINELIST);
+    r.context->RSSetState(r.solid_rasterizer.Get());
+    r.context->OMSetDepthStencilState(r.depth_off.Get(), 0);
+    r.context->GSSetConstantBuffers(0, 1, r.constants.GetAddressOf());
+    r.context->GSSetShader(r.line_geometry_shader.Get(), nullptr, 0);
+    r.context->IASetVertexBuffers(0, 1, r.vertex_buffers[8].GetAddressOf(), &stride, &offset);
+    r.context->Draw(r.vertex_counts[8], 0);
     r.context->GSSetShader(nullptr, nullptr, 0);
   }
   if (r.vertex_buffers[6] && r.vertex_counts[6] != 0)
@@ -1257,8 +1257,8 @@ struct ScriptHardwareMeshWidget::Resources
   GLuint overlay_vao = 0;
   GLuint overlay_vbo = 0;
   GLuint overlay_texture = 0;
-  std::array<GLuint, 8> vertex_buffers{};
-  std::array<GLsizei, 8> vertex_counts{};
+  std::array<GLuint, API::Gui::HARDWARE_MESH_GROUP_COUNT> vertex_buffers{};
+  std::array<GLsizei, API::Gui::HARDWARE_MESH_GROUP_COUNT> vertex_counts{};
   QSize overlay_size;
   std::shared_ptr<const std::vector<API::Gui::CanvasPrimitive>> overlay_hud;
   bool overlay_valid = false;
@@ -1549,29 +1549,15 @@ void ScriptHardwareMeshWidget::Render()
       set_uniforms(r.triangle_program, s.fill_opacity, 0);
       draw_triangles(0, 5);
     }
-    // Group 7 is a depth-writing fill-only overlay in normal mode. Rendering
-    // it before scene wire prevents unrelated triangle edges appearing inside
-    // translucent scripted volumes; scripts submit their desired outer edges
-    // separately through group 5.
-    if (r.vertex_buffers[7] && r.vertex_counts[7] != 0 && s.fill_opacity > 0.0f &&
-        !(s.debug_on_top || s.xray))
-    {
-      r.gl->glEnable(GL_DEPTH_TEST);
-      r.gl->glDepthFunc(GL_LEQUAL);
-      r.gl->glDepthMask(GL_TRUE);
-      r.gl->glUseProgram(r.triangle_program);
-      set_uniforms(r.triangle_program, s.fill_opacity, 0);
-      draw_triangles(7, 8);
-      r.gl->glDepthMask(GL_FALSE);
-    }
     if (s.wireframe && s.wire_opacity > 0.0f)
     {
       r.gl->glUseProgram(r.triangle_program);
       set_uniforms(r.triangle_program, s.wire_opacity, 1);
       draw_triangles(0, 5);
     }
-    if (r.vertex_buffers[7] && r.vertex_counts[7] != 0 && s.fill_opacity > 0.0f &&
-        (s.debug_on_top || s.xray))
+    // Group 7 is depth-tested but does not write depth in normal mode, so
+    // translucent scripted volumes do not hide scene geometry behind them.
+    if (r.vertex_buffers[7] && r.vertex_counts[7] != 0 && s.fill_opacity > 0.0f)
     {
       if (s.debug_on_top || s.xray)
         r.gl->glDisable(GL_DEPTH_TEST);
@@ -1581,8 +1567,13 @@ void ScriptHardwareMeshWidget::Render()
     }
     if (r.vertex_buffers[5] && r.vertex_counts[5] != 0)
     {
-      if (s.debug_on_top || s.xray)
+      if (s.xray)
         r.gl->glDisable(GL_DEPTH_TEST);
+      else
+      {
+        r.gl->glEnable(GL_DEPTH_TEST);
+        r.gl->glDepthMask(GL_FALSE);
+      }
       r.gl->glUseProgram(r.line_program);
       set_uniforms(r.line_program, s.wire_opacity, 2);
       r.gl->glBindVertexArray(r.mesh_vao);
@@ -1591,6 +1582,18 @@ void ScriptHardwareMeshWidget::Render()
       r.gl->glVertexAttribPointer(1, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(API::Gui::HardwareVertex),
                                   reinterpret_cast<void*>(offsetof(API::Gui::HardwareVertex, color)));
       r.gl->glDrawArrays(GL_LINES, 0, r.vertex_counts[5]);
+    }
+    if (r.vertex_buffers[8] && r.vertex_counts[8] != 0)
+    {
+      r.gl->glDisable(GL_DEPTH_TEST);
+      r.gl->glUseProgram(r.line_program);
+      set_uniforms(r.line_program, s.wire_opacity, 2);
+      r.gl->glBindVertexArray(r.mesh_vao);
+      r.gl->glBindBuffer(GL_ARRAY_BUFFER, r.vertex_buffers[8]);
+      r.gl->glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(API::Gui::HardwareVertex), nullptr);
+      r.gl->glVertexAttribPointer(1, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(API::Gui::HardwareVertex),
+                                  reinterpret_cast<void*>(offsetof(API::Gui::HardwareVertex, color)));
+      r.gl->glDrawArrays(GL_LINES, 0, r.vertex_counts[8]);
     }
     if (r.vertex_buffers[6] && r.vertex_counts[6] != 0)
     {
