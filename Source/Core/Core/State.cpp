@@ -33,7 +33,6 @@
 #include "Common/WorkQueueThread.h"
 
 #include "Core/AchievementManager.h"
-#include "Core/API/Events.h"
 #include "Core/ConfigManager.h"
 #include "Core/Core.h"
 #include "Core/CoreTiming.h"
@@ -914,12 +913,6 @@ void LoadAs(Core::System& system, const std::string& filename)
 
         if (s_on_after_load_callback)
           s_on_after_load_callback();
-
-        // Scripts need this only after DoState and the normal post-load hook
-        // have completed.  Emitting here runs listeners on the CPU thread and
-        // makes restored RAM visible without advancing an emulated frame.
-        if (loaded && loadedSuccessfully)
-          API::GetEventHub().EmitEvent(API::Events::SaveStateLoad{false, -1});
       },
       true);
 }

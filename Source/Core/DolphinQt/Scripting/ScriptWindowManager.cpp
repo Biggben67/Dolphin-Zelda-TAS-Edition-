@@ -67,16 +67,17 @@ ScriptWindowManager::ScriptWindowManager(QObject* parent) : QObject(parent)
   connect(&m_timer, &QTimer::timeout, this, &ScriptWindowManager::Sync);
   m_timer.start(POLL_INTERVAL_MS);
 
-  // HostUpdate is the detached-script UI heartbeat. Run every callback through
-  // the CPU-thread queue, whether emulation is running or paused. This gives
-  // canvas scripts one serialized execution model for drawing, input and
-  // memory-adjacent state instead of mixing a frame-thread callback with a
-  // paused-only Qt timer.
+  // Keep detached script windows interactive while paused. While emulation is
+  // running, script work is driven by the frame advance event on the CPU
+  // thread. Pausing and locking the CPU from this Qt timer during active video
+  // capture can deadlock with a synchronous frame callback waiting on the UI.
   connect(&m_host_update_timer, &QTimer::timeout, this, [pending = m_host_update_pending] {
     if (Scripts::IsConstructing())
       return;
 
     Core::System& system = Core::System::GetInstance();
+    if (Core::GetState(system) != Core::State::Paused)
+      return;
     if (pending->exchange(true))
       return;
 

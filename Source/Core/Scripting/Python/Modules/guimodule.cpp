@@ -421,7 +421,8 @@ static PyObject* canvas_hardware_mesh(PyObject* self, PyObject* args)
                      colors.len == positions.len / 3;
   if (!valid)
   {
-    PyBuffer_Release(&positions); PyBuffer_Release(&colors);
+    PyBuffer_Release(&positions);
+    PyBuffer_Release(&colors);
     PyErr_SetString(PyExc_ValueError,
                     "hardware mesh requires at most 4M xyz float vertices and one u32 color per vertex");
     return nullptr;
@@ -435,7 +436,8 @@ static PyObject* canvas_hardware_mesh(PyObject* self, PyObject* args)
     std::memcpy(&vertices[i].x, pos + i * 12, 12);
     std::memcpy(&vertices[i].color, col + i * 4, 4);
   }
-  PyBuffer_Release(&positions); PyBuffer_Release(&colors);
+  PyBuffer_Release(&positions);
+  PyBuffer_Release(&colors);
   Py::GetState<GuiModuleState>(self)->gui->SetHardwareMesh(id, static_cast<size_t>(group),
                                                             std::move(vertices));
   Py_RETURN_NONE;

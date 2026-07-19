@@ -42,6 +42,10 @@ public:
   // A non-empty name_prefix replaces the game-id filename base, letting auxiliary windows
   // (e.g. GBA cores) dump to their own files.
   bool Start(int w, int h, u64 start_ticks, const std::string& name_prefix = {});
+  // Use the frame metadata supplied by a caller that is outside the emulation thread. This avoids
+  // querying the live video interface while it may be reconfiguring during a transition.
+  bool Start(int w, int h, u64 start_ticks, const FrameState& initial_state,
+             const std::string& name_prefix = {});
   void AddFrame(const FrameData&);
   void Stop();
   void DoState(PointerWrap&);
@@ -50,8 +54,8 @@ public:
 
 private:
   bool IsFirstFrameInCurrentFile() const;
-  bool IsFrameDumpManagerDump() const;
-  bool PrepareEncoding(int w, int h, u64 start_ticks, u32 savestate_index);
+  bool PrepareEncoding(int w, int h, u64 start_ticks, u32 savestate_index,
+                       const FrameState& initial_state = {});
   bool CreateVideoFile();
   void CloseVideoFile();
   void CheckForConfigChange(const FrameData&);

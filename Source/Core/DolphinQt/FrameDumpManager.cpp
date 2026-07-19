@@ -897,7 +897,8 @@ QRect RoundedCanvasRect(const QRectF& rect, const QSize& canvas_size)
   return rounded;
 }
 
-QImage CaptureWidgetOffscreen(QWidget* widget, const QImage& game_frame, int upscale_factor)
+QImage CaptureWidgetOffscreen(QWidget* widget, const QImage& game_frame, int upscale_factor,
+                              bool synchronize_hardware = false)
 {
   if (!widget || !widget->isVisible() || widget->width() <= 0 || widget->height() <= 0)
     return {};
@@ -906,7 +907,7 @@ QImage CaptureWidgetOffscreen(QWidget* widget, const QImage& game_frame, int ups
     return game_frame;
 
   if (auto* hardware = qobject_cast<ScriptHardwareMeshWidget*>(widget))
-    return UpscaleNearest(hardware->CaptureFrame(), upscale_factor);
+    return UpscaleNearest(hardware->CaptureFrame(synchronize_hardware), upscale_factor);
 
 #if defined(HAS_LIBMGBA)
   if (const auto* gba = qobject_cast<GBAWidget*>(widget))
@@ -942,13 +943,13 @@ QImage CaptureWidgetOffscreen(QWidget* widget, const QImage& game_frame, int ups
   QPainter painter(&image);
   painter.scale(render_scale, render_scale);
   widget->render(&painter);
-  // QWidget::render() paints a native D3D child as black. Replace that child
-  // rectangle with its resolved D3D backbuffer so script tools participate in
-  // the same preview, composite, and separate-window dump paths as Qt tools.
+
+  // QWidget::render cannot capture a native GPU child. Composite its resolved
+  // backbuffer so Python hardware-canvas tools remain dumpable.
   if (auto* hardware = widget->findChild<ScriptHardwareMeshWidget*>(); hardware &&
       hardware->isVisible())
   {
-    const QImage hardware_frame = hardware->CaptureFrame();
+    const QImage hardware_frame = hardware->CaptureFrame(synchronize_hardware);
     if (!hardware_frame.isNull())
     {
       const QPoint origin = hardware->mapTo(widget, QPoint(0, 0));
@@ -970,7 +971,13 @@ public:
     RefreshPreviews();
 
     QObject::connect(&m_preview_timer, &QTimer::timeout, m_owner, [this] {
-      if (m_dumping.load() || m_preview_enabled.load())
+      // StartDump registers the consumer once. While it is active, every source is captured by
+      // the frame callback itself, so source discovery and callback registration are both
+      // redundant and can contend with its synchronous UI handoff.
+      if (m_dumping.load())
+        return;
+
+      if (m_preview_enabled.load())
         RegisterFrameConsumer();
       else
         UnregisterFrameConsumer();
@@ -979,7 +986,11 @@ public:
         m_discovery_counter = 0;
         RefreshSources();
       }
-      RefreshPreviews();
+      // An active dump captures every visible source on the UI thread. Rendering those widgets a
+      // second time from this timer can contend with the render widget while the dump worker is
+      // synchronously waiting for that same UI thread.
+      if (!m_dumping.load())
+        RefreshPreviews();
     });
 
 #if !defined(HAVE_FFMPEG)
@@ -1866,8 +1877,6 @@ private:
     if (!dump_selected_windows &&
         !m_dump.Start(m_output_size.width(), m_output_size.height(), start_ticks, "Composite"))
     {
-      if (!m_preview_enabled.load())
-        UnregisterFrameConsumer();
       QMessageBox::warning(m_owner, FrameDumpManager::tr("Frame Dump Manager"),
                            FrameDumpManager::tr("The composite frame dump could not be started."));
       return;
@@ -1975,9 +1984,12 @@ private:
 #endif
 
       const QImage source_image =
-          CaptureWidgetOffscreen(source.widget, game_frame, source.upscale_factor);
+          CaptureWidgetOffscreen(source.widget, game_frame, source.upscale_factor, true);
       if (!source_image.isNull())
       {
+        if (m_preview_enabled.load())
+          source.composition_item->SetPixmap(QPixmap::fromImage(source_image));
+
         const auto* input_display = qobject_cast<InputDisplayWidget*>(source.widget);
         const bool force_black_background =
             input_display && input_display->IsBackgroundRemoved();
@@ -1994,8 +2006,8 @@ private:
     if (image.isNull())
       return;
 
-    QImage rgba = force_black_background ? FlattenOnBlack(image) :
-                                           image.convertToFormat(QImage::Format_RGBA8888);
+    QImage rgba =
+        force_black_background ? FlattenOnBlack(image) : image.convertToFormat(QImage::Format_RGBA8888);
     if (rgba.isNull())
       return;
 
@@ -2156,9 +2168,12 @@ private:
     for (const SourceEntry* source : ordered_sources)
     {
       const QImage source_image =
-          CaptureWidgetOffscreen(source->widget, game_frame, source->upscale_factor);
+          CaptureWidgetOffscreen(source->widget, game_frame, source->upscale_factor, true);
       if (!source_image.isNull())
       {
+        if (m_preview_enabled.load())
+          source->composition_item->SetPixmap(QPixmap::fromImage(source_image));
+
         const QRect target_rect =
             RoundedCanvasRect(source->composition_item->LayoutRect(), m_output_size);
         if (!target_rect.isValid() || target_rect.isEmpty())
@@ -2225,9 +2240,13 @@ private:
               if (preview || gba_paced || selected_window_dump)
                 current->m_latest_game_frame = view.copy();
               if (selected_window_dump)
+              {
                 current->CaptureSelectedSourceFrames(view, state, std::nullopt);
+              }
               else if (!gba_paced && current->m_dumping.load())
+              {
                 current->CaptureDumpFrame(view, state);
+              }
             },
             Qt::BlockingQueuedConnection);
         return;

@@ -167,7 +167,6 @@ public:
     u64 generation = 0;
   };
 
-
   WidgetId GetOrCreateCanvas(void* owner, const std::string& title, int width, int height,
                              bool embedded = false, bool overlay = false);
   void CanvasClear(WidgetId id);
@@ -303,7 +302,6 @@ private:
   // Replays a committed canvas list at the current cursor; caller is already inside ImGui::Begin.
   void RenderEmbeddedCanvas(WidgetId id, int width, int height);
 
-private:
   // Pushing all draw calls onto a vector of functions is probably not
   // the most efficient thing in the world, but it seems to be negligible.
   // Since we want script code to be able to draw stuff whenever it wants

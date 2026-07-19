@@ -32,9 +32,12 @@ public:
 
   void SetSnapshot(API::Gui::HardwareSnapshot snapshot);
   bool IsReady() const { return m_ready; }
-  // The frame dump manager cannot use QWidget::render() on this native D3D
-  // child. Return a CPU image from the resolved swap-chain backbuffer instead.
-  QImage CaptureFrame();
+  // The frame dump manager cannot use QWidget::render() on this native GPU
+  // child. Return a CPU image from the resolved backbuffer instead. A
+  // synchronized capture applies the latest retained script snapshot first;
+  // this is used only by active frame dumps that require one image per
+  // emulation frame.
+  QImage CaptureFrame(bool synchronize = false);
 
 protected:
   QPaintEngine* paintEngine() const override;

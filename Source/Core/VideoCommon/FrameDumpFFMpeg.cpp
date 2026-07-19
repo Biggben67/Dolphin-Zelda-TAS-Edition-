@@ -11,8 +11,6 @@
 #include <array>
 #include <initializer_list>
 #include <string>
-#include <string_view>
-#include <thread>
 
 #include <fmt/chrono.h>
 #include <fmt/format.h>
@@ -60,19 +58,14 @@ struct FrameDumpContext
 
   u64 start_ticks = 0;
   u32 savestate_index = 0;
+  int initial_refresh_rate_num = 0;
+  int initial_refresh_rate_den = 0;
 
   bool gave_vfr_warning = false;
 };
 
 namespace
 {
-#if defined(AV_LEVEL_UNKNOWN)
-// FFmpeg 8 renamed the retired FF_LEVEL_UNKNOWN codec-level sentinel.
-constexpr int FFMPEG_LEVEL_UNKNOWN = AV_LEVEL_UNKNOWN;
-#else
-constexpr int FFMPEG_LEVEL_UNKNOWN = FF_LEVEL_UNKNOWN;
-#endif
-
 AVRational GetTimeBaseForCurrentRefreshRate(s64 max_denominator)
 {
   // TODO: GetTargetRefreshRate* are not safe from GPU thread.
@@ -81,6 +74,17 @@ AVRational GetTimeBaseForCurrentRefreshRate(s64 max_denominator)
   int den;
   av_reduce(&num, &den, int(vi.GetTargetRefreshRateDenominator()),
             int(vi.GetTargetRefreshRateNumerator()), max_denominator);
+  return AVRational{num, den};
+}
+
+AVRational GetTimeBaseForFrameState(const FrameState& state, s64 max_denominator)
+{
+  if (state.refresh_rate_num <= 0 || state.refresh_rate_den <= 0)
+    return GetTimeBaseForCurrentRefreshRate(max_denominator);
+
+  int num;
+  int den;
+  av_reduce(&num, &den, state.refresh_rate_den, state.refresh_rate_num, max_denominator);
   return AVRational{num, den};
 }
 
@@ -206,7 +210,22 @@ bool FFMpegFrameDump::Start(int w, int h, u64 start_ticks, const std::string& na
   return PrepareEncoding(w, h, start_ticks, m_savestate_index);
 }
 
-bool FFMpegFrameDump::PrepareEncoding(int w, int h, u64 start_ticks, u32 savestate_index)
+bool FFMpegFrameDump::Start(int w, int h, u64 start_ticks, const FrameState& initial_state,
+                            const std::string& name_prefix)
+{
+  if (IsStarted())
+    return true;
+
+  m_savestate_index = initial_state.savestate_index;
+  m_start_time = std::time(nullptr);
+  m_file_index = 0;
+  m_name_prefix = name_prefix;
+
+  return PrepareEncoding(w, h, start_ticks, m_savestate_index, initial_state);
+}
+
+bool FFMpegFrameDump::PrepareEncoding(int w, int h, u64 start_ticks, u32 savestate_index,
+                                      const FrameState& initial_state)
 {
   m_context = std::make_unique<FrameDumpContext>();
 
@@ -215,6 +234,8 @@ bool FFMpegFrameDump::PrepareEncoding(int w, int h, u64 start_ticks, u32 savesta
 
   m_context->start_ticks = start_ticks;
   m_context->savestate_index = savestate_index;
+  m_context->initial_refresh_rate_num = initial_state.refresh_rate_num;
+  m_context->initial_refresh_rate_den = initial_state.refresh_rate_den;
 
   InitAVCodec();
   const bool success = CreateVideoFile();
@@ -252,7 +273,6 @@ bool FFMpegFrameDump::CreateVideoFile()
   }
 
   const bool use_lossless = Config::Get(Config::GFX_USE_LOSSLESS);
-  const bool composite_dump = m_name_prefix == "Composite";
   const std::string codec_name = use_lossless ? "utvideo" : Config::Get(Config::GFX_DUMP_CODEC);
 
   AVCodecID codec_id = output_format->video_codec;
@@ -306,7 +326,10 @@ bool FFMpegFrameDump::CreateVideoFile()
     m_max_denominator = std::numeric_limits<unsigned short>::max();
   }
 
-  const auto time_base = GetTimeBaseForCurrentRefreshRate(m_max_denominator);
+  const auto time_base = GetTimeBaseForFrameState(
+      FrameState{.refresh_rate_num = m_context->initial_refresh_rate_num,
+                 .refresh_rate_den = m_context->initial_refresh_rate_den},
+      m_max_denominator);
 
   INFO_LOG_FMT(FRAMEDUMP, "Creating video file: {} x {} @ {}/{} fps", m_context->width,
                m_context->height, time_base.den, time_base.num);
@@ -316,21 +339,11 @@ bool FFMpegFrameDump::CreateVideoFile()
   m_context->codec->width = m_context->width;
   m_context->codec->height = m_context->height;
   m_context->codec->time_base = time_base;
-  m_context->codec->gop_size = composite_dump && !use_lossless ? 60 : 1;
-  m_context->codec->max_b_frames = 0;
-  m_context->codec->level = composite_dump ? FFMPEG_LEVEL_UNKNOWN : 1;
-
-  if (const unsigned int thread_count = std::thread::hardware_concurrency(); thread_count > 1)
-    m_context->codec->thread_count = static_cast<int>(thread_count);
-
-  if (composite_dump && codec->id == AV_CODEC_ID_MPEG4 && !use_lossless)
-  {
-    // Composite dumps are full-canvas 60 Hz videos. Encoding every frame as an I-frame makes
-    // MPEG-4 look heavily starved even at high nominal bitrates, so keep it editor-friendly
-    // without B-frames but allow P-frames and a tighter quantizer range.
-    m_context->codec->qmin = 1;
-    m_context->codec->qmax = 10;
-  }
+  // Keep the encoder defaults used by the regular framedump path. Manager sources are captured
+  // synchronously from the Qt thread, so forcing a large encoder worker pool or an alternate GOP
+  // profile can stall the producer even though normal dumping remains responsive.
+  m_context->codec->gop_size = 1;
+  m_context->codec->level = 1;
 
   AVPixelFormat pix_fmt = AV_PIX_FMT_NONE;
 
@@ -410,11 +423,6 @@ bool FFMpegFrameDump::IsFirstFrameInCurrentFile() const
   return m_context->last_pts == AV_NOPTS_VALUE;
 }
 
-bool FFMpegFrameDump::IsFrameDumpManagerDump() const
-{
-  return m_name_prefix == "Composite" || m_name_prefix.starts_with("FrameDumpManager/");
-}
-
 void FFMpegFrameDump::AddFrame(const FrameData& frame)
 {
   // Are we even dumping?
@@ -427,15 +435,11 @@ void FFMpegFrameDump::AddFrame(const FrameData& frame)
   if (!IsStarted())
     return;
 
-  const s64 pts = IsFrameDumpManagerDump() ?
-                      frame.state.frame_number :
-                      av_rescale_q(
-                          frame.state.ticks - m_context->start_ticks,
-                          // TODO: GetTicksPerSecond is not safe from GPU thread.
-                          AVRational{1, int(Core::System::GetInstance()
-                                                .GetSystemTimers()
-                                                .GetTicksPerSecond())},
-                          m_context->codec->time_base);
+  const s64 pts = av_rescale_q(
+      frame.state.ticks - m_context->start_ticks,
+      // TODO: GetTicksPerSecond is not safe from GPU thread.
+      AVRational{1, int(Core::System::GetInstance().GetSystemTimers().GetTicksPerSecond())},
+      m_context->codec->time_base);
 
   if (!IsFirstFrameInCurrentFile())
   {
@@ -568,12 +572,6 @@ void FFMpegFrameDump::DoState(PointerWrap& p)
 
 void FFMpegFrameDump::CheckForConfigChange(const FrameData& frame)
 {
-  // The frame dump manager produces fixed editor-style video tracks. Its sources can be paced by
-  // different windows and should not be split just because the underlying game state, refresh
-  // metadata, or source widget size changes during a long dump.
-  if (IsFrameDumpManagerDump())
-    return;
-
   bool restart_dump = false;
 
   // We check here to see if the requested width and height have changed since the last frame which
@@ -606,7 +604,8 @@ void FFMpegFrameDump::CheckForConfigChange(const FrameData& frame)
   {
     Stop();
     ++m_file_index;
-    PrepareEncoding(frame.width, frame.height, frame.state.ticks, frame.state.savestate_index);
+    PrepareEncoding(frame.width, frame.height, frame.state.ticks, frame.state.savestate_index,
+                    frame.state);
   }
 }
 

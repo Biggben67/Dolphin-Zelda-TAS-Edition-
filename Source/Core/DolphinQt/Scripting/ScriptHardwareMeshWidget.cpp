@@ -597,14 +597,20 @@ void ScriptHardwareMeshWidget::Present()
   update();
 }
 
-QImage ScriptHardwareMeshWidget::CaptureFrame()
+QImage ScriptHardwareMeshWidget::CaptureFrame(bool synchronize)
 {
-  if (!EnsureResources())
-    return {};
+  if (synchronize)
+  {
+    // The frame-dump callback runs on the Qt thread, but normal snapshot
+    // delivery is timer-driven. A blocking dump can otherwise starve that
+    // timer and repeatedly read an old camera image. Refresh and present the
+    // retained script state here, at the generic canvas capture boundary.
+    SetSnapshot(API::GetGui().SnapshotHardwareMesh(m_id));
+    Render();
+  }
 
-  // Render first so frame-dump callbacks capture the same retained scene that
-  // is being presented to the detached script window.
-  Render();
+  // Preview consumers intentionally capture the last completed frame. They
+  // must not create, render, or present a native child swap chain themselves.
   if (!m_resources || !m_resources->backbuffer)
     return {};
 
@@ -1298,8 +1304,10 @@ void ScriptHardwareMeshWidget::SetSnapshot(API::Gui::HardwareSnapshot snapshot)
     m_gl_window->requestUpdate();
 }
 
-QImage ScriptHardwareMeshWidget::CaptureFrame()
+QImage ScriptHardwareMeshWidget::CaptureFrame(bool synchronize)
 {
+  if (synchronize)
+    SetSnapshot(API::GetGui().SnapshotHardwareMesh(m_id));
   Render();
   if (!m_resources || !m_resources->context || !m_gl_window || width() <= 0 || height() <= 0 ||
       !m_resources->context->makeCurrent(m_gl_window))
