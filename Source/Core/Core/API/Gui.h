@@ -151,6 +151,9 @@ public:
     bool debug_on_top = false;
     bool fullscreen = false;
     bool clean_capture = false;
+    // Clean capture controls the scene viewport. HUD composition is
+    // independent so scripts may retain selected scene annotations.
+    bool hud_visible = true;
   };
   struct HardwareSnapshot
   {

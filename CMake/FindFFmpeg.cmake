@@ -1,138 +1,169 @@
-# - Try to find the required ffmpeg components(default: AVFORMAT, AVUTIL, AVCODEC)
+# FindFFmpeg
+# ----------
 #
-# Once done this will define
-#  FFMPEG_FOUND         - System has the all required components.
-#  FFMPEG_LIBRARIES     - Link these to use the required ffmpeg components.
+# Find the native FFmpeg includes and libraries
 #
-# For each of the components it will additionally set.
-#   - AVCODEC
-#   - AVDEVICE
-#   - AVFORMAT
-#   - AVFILTER
-#   - AVUTIL
-#   - POSTPROC
-#   - SWSCALE
-# the following target will be defined
-#  FFmpeg::SDL::<component>        - link to this target to
-# the following variables will be defined
-#  FFmpeg_<component>_FOUND        - System has <component>
-#  FFmpeg_<component>_INCLUDE_DIRS - Include directory necessary for using the <component> headers
-#  FFmpeg_<component>_LIBRARIES    - Link these to use <component>
-#  FFmpeg_<component>_DEFINITIONS  - Compiler switches required for using <component>
-#  FFmpeg_<component>_VERSION      - The components version
+# This module defines the following variables:
 #
-# Copyright (c) 2006, Matthias Kretz, <kretz@kde.org>
-# Copyright (c) 2008, Alexander Neundorf, <neundorf@kde.org>
-# Copyright (c) 2011, Michael Jansen, <kde@michael-jansen.biz>
-# Copyright (c) 2023, Sam lantinga, <slouken@libsdl.org>
+#  FFmpeg_INCLUDE_<component>: where to find <component>.h
+#  FFmpeg_LIBRARY_<component>: where to find the <component> library
+#  FFmpeg_INCLUDES: aggregate all the include paths
+#  FFmpeg_LIBRARIES: aggregate all the paths to the libraries
+#  FFmpeg_FOUND: True if all components have been found
 #
-# Redistribution and use is allowed according to the terms of the BSD license.
-# For details see the accompanying COPYING-CMAKE-SCRIPTS file.
+# This module defines the following targets, which are preferred over variables:
+#
+#  FFmpeg::<component>: Target to use <component> directly, with include path,
+#    library and dependencies set up. If you are using a static build, you are
+#    responsible for adding any external dependencies (such as zlib, bzlib...).
+#
+# <component> can be one of:
+#   avcodec
+#   avdevice
+#   avfilter
+#   avformat
+#   postproc
+#   swresample
+#   swscale
+#
+
+set(_FFmpeg_ALL_COMPONENTS
+  avcodec
+  avdevice
+  avfilter
+  avformat
+  avutil
+  postproc
+  swresample
+  swscale
+)
+
+set(_FFmpeg_DEPS_avcodec avutil)
+set(_FFmpeg_DEPS_avdevice avcodec avformat avutil)
+set(_FFmpeg_DEPS_avfilter avutil)
+set(_FFmpeg_DEPS_avformat avcodec avutil)
+set(_FFmpeg_DEPS_postproc avutil)
+set(_FFmpeg_DEPS_swresample avutil)
+set(_FFmpeg_DEPS_swscale avutil)
+
+function(find_ffmpeg LIBNAME)
+  if(DEFINED ENV{FFMPEG_DIR})
+    set(FFMPEG_DIR $ENV{FFMPEG_DIR})
+  endif()
+
+  if(FFMPEG_DIR)
+    list(APPEND INCLUDE_PATHS
+      ${FFMPEG_DIR}
+      ${FFMPEG_DIR}/ffmpeg
+      ${FFMPEG_DIR}/lib${LIBNAME}
+      ${FFMPEG_DIR}/include/lib${LIBNAME}
+      ${FFMPEG_DIR}/include/ffmpeg
+      ${FFMPEG_DIR}/include
+      NO_DEFAULT_PATH
+      NO_CMAKE_FIND_ROOT_PATH
+    )
+    list(APPEND LIB_PATHS
+      ${FFMPEG_DIR}
+      ${FFMPEG_DIR}/lib
+      ${FFMPEG_DIR}/lib${LIBNAME}
+      NO_DEFAULT_PATH
+      NO_CMAKE_FIND_ROOT_PATH
+    )
+  else()
+    list(APPEND INCLUDE_PATHS
+      /usr/local/include/ffmpeg
+      /usr/local/include/lib${LIBNAME}
+      /usr/include/ffmpeg
+      /usr/include/lib${LIBNAME}
+      /usr/include/ffmpeg/lib${LIBNAME}
+    )
+
+    list(APPEND LIB_PATHS
+      /usr/local/lib
+      /usr/lib
+    )
+  endif()
+
+  find_path(FFmpeg_INCLUDE_${LIBNAME} lib${LIBNAME}/${LIBNAME}.h
+    HINTS ${INCLUDE_PATHS}
+  )
+
+  find_library(FFmpeg_LIBRARY_${LIBNAME} ${LIBNAME}
+    HINTS ${LIB_PATHS}
+  )
+
+  if(NOT FFMPEG_DIR AND (NOT FFmpeg_LIBRARY_${LIBNAME} OR NOT FFmpeg_INCLUDE_${LIBNAME}))
+    # Didn't find it in the usual paths, try pkg-config
+    find_package(PkgConfig QUIET)
+    pkg_check_modules(FFmpeg_PKGCONFIG_${LIBNAME} QUIET lib${LIBNAME})
+
+    find_path(FFmpeg_INCLUDE_${LIBNAME} lib${LIBNAME}/${LIBNAME}.h
+      ${FFmpeg_PKGCONFIG_${LIBNAME}_INCLUDE_DIRS}
+    )
+
+    find_library(FFmpeg_LIBRARY_${LIBNAME} ${LIBNAME}
+      ${FFmpeg_PKGCONFIG_${LIBNAME}_LIBRARY_DIRS}
+    )
+  endif()
+
+  if(FFmpeg_INCLUDE_${LIBNAME} AND FFmpeg_LIBRARY_${LIBNAME})
+    set(FFmpeg_INCLUDE_${LIBNAME} "${FFmpeg_INCLUDE_${LIBNAME}}" PARENT_SCOPE)
+    set(FFmpeg_LIBRARY_${LIBNAME} "${FFmpeg_LIBRARY_${LIBNAME}}" PARENT_SCOPE)
+    set(FFmpeg_${c}_FOUND TRUE PARENT_SCOPE)
+    if(NOT FFmpeg_FIND_QUIETLY)
+      message("--  Found ${LIBNAME}: ${FFmpeg_INCLUDE_${LIBNAME}} ${FFmpeg_LIBRARY_${LIBNAME}}")
+    endif()
+  endif()
+endfunction()
+
+foreach(c ${_FFmpeg_ALL_COMPONENTS})
+  find_ffmpeg(${c})
+endforeach()
+
+foreach(c ${_FFmpeg_ALL_COMPONENTS})
+  if(FFmpeg_${c}_FOUND)
+    list(APPEND FFmpeg_INCLUDES ${FFmpeg_INCLUDE_${c}})
+    list(APPEND FFmpeg_LIBRARIES ${FFmpeg_LIBRARY_${c}})
+
+    add_library(FFmpeg::${c} IMPORTED UNKNOWN)
+    set_target_properties(FFmpeg::${c} PROPERTIES
+      IMPORTED_LOCATION ${FFmpeg_LIBRARY_${c}}
+      INTERFACE_INCLUDE_DIRECTORIES ${FFmpeg_INCLUDE_${c}}
+    )
+    set(deps)
+    foreach(dep ${_FFmpeg_DEPS_${c}})
+      list(APPEND deps FFmpeg::${dep})
+    endforeach()
+
+    if(WIN32 AND c STREQUAL "avcodec")
+      list(APPEND deps mfuuid strmiids)
+    endif()
+
+    if(deps)
+      set_target_properties(FFmpeg::${c} PROPERTIES
+        INTERFACE_LINK_LIBRARIES "${deps}"
+      )
+    endif()
+    unset(deps)
+  endif()
+endforeach()
+
+if(FFmpeg_INCLUDES)
+  list(REMOVE_DUPLICATES FFmpeg_INCLUDES)
+endif()
+
+foreach(c ${FFmpeg_FIND_COMPONENTS})
+  list(APPEND _FFmpeg_REQUIRED_VARS FFmpeg_INCLUDE_${c} FFmpeg_LIBRARY_${c})
+endforeach()
 
 include(FindPackageHandleStandardArgs)
-include("${CMAKE_CURRENT_LIST_DIR}/PkgConfigHelper.cmake")
+find_package_handle_standard_args(FFmpeg
+  REQUIRED_VARS ${_FFmpeg_REQUIRED_VARS}
+  HANDLE_COMPONENTS
+)
 
-# The default components were taken from a survey over other FindFFMPEG.cmake files
-if(NOT FFmpeg_FIND_COMPONENTS)
-  set(FFmpeg_FIND_COMPONENTS AVCODEC AVFORMAT AVUTIL)
-  foreach(_component IN LISTS FFmpeg_FIND_COMPONENTS)
-    set(FFmpeg_FIND_REQUIRED_${_component} TRUE)
-  endforeach()
-endif()
-
-find_package(PkgConfig QUIET)
-
-#
-### Macro: find_component
-#
-# Checks for the given component by invoking pkgconfig and then looking up the libraries and
-# include directories.
-#
-macro(find_component _component _pkgconfig _library _header)
-
-  # use pkg-config to get the directories and then use these values
-  # in the FIND_PATH() and FIND_LIBRARY() calls
-  if(PKG_CONFIG_FOUND)
-    pkg_check_modules(PC_${_component} QUIET ${_pkgconfig})
-  endif()
-
-  find_path(FFmpeg_${_component}_INCLUDE_DIRS
-    NAMES ${_header}
-    HINTS
-      ${PC_${_component}_INCLUDE_DIRS}
-    PATH_SUFFIXES
-      ffmpeg
-  )
-
-  find_library(FFmpeg_${_component}_LIBRARY
-    NAMES ${_library}
-    HINTS
-      ${PC_${_component}_LIBRARY_DIRS}
-  )
-
-  if(FFmpeg_${_component}_INCLUDE_DIRS AND FFmpeg_${_component}_LIBRARY)
-    set(FFmpeg_${_component}_FOUND TRUE)
-  endif()
-
-  if(PC_${_component}_FOUND)
-    get_flags_from_pkg_config("${FFmpeg_${_component}_LIBRARY}" "PC_${_component}" "${_component}")
-  endif()
-
-  set(FFmpeg_${_component}_VERSION "${PC_${_component}_VERSION}")
-
-  set(FFmpeg_${_component}_COMPILE_OPTIONS "${${_component}_options}" CACHE STRING "Extra compile options of FFmpeg ${_component}")
-
-  set(FFmpeg_${_component}_LIBRARIES "${${_component}_link_libraries}" CACHE STRING "Extra link libraries of FFmpeg ${_component}")
-
-  set(FFmpeg_${_component}_LINK_OPTIONS "${${_component}_link_options}" CACHE STRING "Extra link flags of FFmpeg ${_component}")
-
-  set(FFmpeg_${_component}_LINK_DIRECTORIES "${${_component}_link_directories}" CACHE PATH "Extra link directories of FFmpeg ${_component}")
-
-  mark_as_advanced(
-    FFmpeg_${_component}_INCLUDE_DIRS
-    FFmpeg_${_component}_LIBRARY
-    FFmpeg_${_component}_COMPILE_OPTIONS
-    FFmpeg_${_component}_LIBRARIES
-    FFmpeg_${_component}_LINK_OPTIONS
-    FFmpeg_${_component}_LINK_DIRECTORIES
-  )
-endmacro()
-
-# Check for all possible component.
-find_component(AVCODEC    libavcodec    avcodec  libavcodec/avcodec.h)
-find_component(AVFORMAT   libavformat   avformat libavformat/avformat.h)
-find_component(AVDEVICE   libavdevice   avdevice libavdevice/avdevice.h)
-find_component(AVUTIL     libavutil     avutil   libavutil/avutil.h)
-find_component(AVFILTER   libavfilter   avfilter libavfilter/avfilter.h)
-find_component(SWSCALE    libswscale    swscale  libswscale/swscale.h)
-find_component(POSTPROC   libpostproc   postproc libpostproc/postprocess.h)
-find_component(SWRESAMPLE libswresample swresample libswresample/swresample.h)
-
-# Compile the list of required vars
-set(_FFmpeg_REQUIRED_VARS)
-foreach(_component ${FFmpeg_FIND_COMPONENTS})
-  list(APPEND _FFmpeg_REQUIRED_VARS FFmpeg_${_component}_INCLUDE_DIRS FFmpeg_${_component}_LIBRARY)
-endforeach ()
-
-# Give a nice error message if some of the required vars are missing.
-find_package_handle_standard_args(FFmpeg DEFAULT_MSG ${_FFmpeg_REQUIRED_VARS})
-
-set(FFMPEG_LIBRARIES)
-if(FFmpeg_FOUND)
-  foreach(_component IN LISTS FFmpeg_FIND_COMPONENTS)
-    if(FFmpeg_${_component}_FOUND)
-      list(APPEND FFMPEG_LIBRARIES FFmpeg::SDL::${_component})
-      if(NOT TARGET FFmpeg::SDL::${_component})
-        add_library(FFmpeg::SDL::${_component} UNKNOWN IMPORTED)
-        set_target_properties(FFmpeg::SDL::${_component} PROPERTIES
-          IMPORTED_LOCATION "${FFmpeg_${_component}_LIBRARY}"
-          INTERFACE_INCLUDE_DIRECTORIES "${FFmpeg_${_component}_INCLUDE_DIRS}"
-          INTERFACE_COMPILE_OPTIONS "${FFmpeg_${_component}_COMPILE_OPTIONS}"
-          INTERFACE_LINK_LIBRARIES "${FFmpeg_${_component}_LIBRARIES}"
-          INTERFACE_LINK_OPTIONS "${FFmpeg_${_component}_LINK_OPTIONS}"
-          INTERFACE_LINK_DIRECTORIES "${FFmpeg_${_component}_LINK_DIRECTORIES}"
-        )
-      endif()
-    endif()
-  endforeach()
-endif()
+foreach(c ${_FFmpeg_ALL_COMPONENTS})
+  unset(_FFmpeg_DEPS_${c})
+endforeach()
+unset(_FFmpeg_ALL_COMPONENTS)
+unset(_FFmpeg_REQUIRED_VARS)

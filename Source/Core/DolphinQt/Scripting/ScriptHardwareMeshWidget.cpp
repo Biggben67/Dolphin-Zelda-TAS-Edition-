@@ -820,7 +820,7 @@ void ScriptHardwareMeshWidget::Render()
   if (r.msaa_color)
     r.context->ResolveSubresource(r.backbuffer.Get(), 0, r.msaa_color.Get(), 0,
                                   DXGI_FORMAT_B8G8R8A8_UNORM);
-  if (r.hud_target && r.hud_brush && m_snapshot.hud && !s.clean_capture)
+  if (r.hud_target && r.hud_brush && m_snapshot.hud && s.hud_visible)
   {
     r.context->OMSetRenderTargets(0, nullptr, nullptr);
     r.context->Flush();
@@ -1611,7 +1611,7 @@ void ScriptHardwareMeshWidget::Render()
       draw_triangles(6, 7);
     }
 
-    if (!s.clean_capture && m_snapshot.hud)
+    if (s.hud_visible && m_snapshot.hud)
     {
       const bool overlay_changed = !r.overlay_valid || r.overlay_size != QSize(pixel_width, pixel_height) ||
                                    r.overlay_hud != m_snapshot.hud;

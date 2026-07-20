@@ -600,7 +600,7 @@ static void canvas_hardware_state(PyObject* self, u64 id, float ex, float ey, fl
                                   float ry, float rz, float ux, float uy, float uz, float fx,
                                   float fy, float fz, float focal, float radius, float fill,
                                   float wire, int filled, int wireframe, int enabled, int xray,
-                                  int debug_on_top, int fullscreen, int clean_capture)
+                                  int debug_on_top, int fullscreen, int clean_capture, int hud_visible)
 {
   API::Gui::HardwareState state{};
   state.enabled = enabled != 0;
@@ -610,6 +610,7 @@ static void canvas_hardware_state(PyObject* self, u64 id, float ex, float ey, fl
   state.filled = filled != 0; state.wireframe = wireframe != 0;
   state.xray = xray != 0; state.debug_on_top = debug_on_top != 0; state.fullscreen = fullscreen != 0;
   state.clean_capture = clean_capture != 0;
+  state.hud_visible = hud_visible != 0;
   Py::GetState<GuiModuleState>(self)->gui->SetHardwareState(id, state);
 }
 
@@ -944,12 +945,14 @@ class Canvas:
         hud.commit()
     def hardware_state(self, eye, right, up, forward, focal, radius, fill_opacity, wire_opacity,
                        filled=True, wireframe=True, enabled=True, xray=False, debug_on_top=False,
-                       fullscreen=False, clean_capture=False):
+                       fullscreen=False, clean_capture=False, hud_visible=None):
+        if hud_visible is None:
+            hud_visible = not clean_capture
         _canvas_hardware_state(self._id, eye[0], eye[1], eye[2], right[0], right[1], right[2],
                                up[0], up[1], up[2], forward[0], forward[1], forward[2], focal,
                                radius, fill_opacity, wire_opacity, int(filled), int(wireframe),
                                int(enabled), int(xray), int(debug_on_top), int(fullscreen),
-                               int(clean_capture))
+                               int(clean_capture), int(hud_visible))
     def text(self, pos, color, text):
         _canvas_text(self._id, pos[0], pos[1], color, text)
     def image(self, path, pos, size, *, tint=0, src=(0.0, 0.0, 1.0, 1.0)):
