@@ -91,6 +91,11 @@ struct PyEvent<MappingFunc<TEvent, TsArgs...>, TFunc>
 {
   static std::function<void(const TEvent&)> GetListener(const Py::Object module)
   {
+    // EventHub listeners may be emitted by the CPU, video, or frame-dump worker. A
+    // PyThreadState belongs to the thread that created it, so retaining the CPU
+    // thread's state and restoring it from another thread makes CPython abort.
+    // Keep the interpreter identity instead and attach a temporary state for the
+    // thread that is dispatching this particular event.
     PyInterpreterState* interpreter = PyThreadState_Get()->interp;
     return [module, interpreter](const TEvent& event) {
       PyThreadState* threadstate = PyThreadState_New(interpreter);
@@ -102,7 +107,7 @@ struct PyEvent<MappingFunc<TEvent, TsArgs...>, TFunc>
 
       PyEval_RestoreThread(threadstate);
       Listener(module, event);
-      // DeleteCurrent also releases the GIL. This keeps the short lived state
+      // DeleteCurrent also releases the GIL. This keeps the short-lived state
       // local to the emitting thread and works for both the main interpreter and
       // script subinterpreters.
       PyThreadState_Clear(threadstate);

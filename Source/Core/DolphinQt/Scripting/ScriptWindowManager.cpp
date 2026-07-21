@@ -8,6 +8,7 @@
 #include <optional>
 
 #include <QCheckBox>
+#include <QApplication>
 #include <QClipboard>
 #include <QCoreApplication>
 #include <QGuiApplication>
@@ -64,6 +65,14 @@ ScriptWindowManager::ScriptWindowManager(QObject* parent) : QObject(parent)
                 });
             API::GetGui().SetDetachedScriptWindowFocused(script_window_focused);
           });
+  connect(qApp, &QApplication::focusChanged, this, [this](QWidget*, QWidget* focused_widget) {
+    const bool editing_script_text =
+        qobject_cast<QLineEdit*>(focused_widget) &&
+        std::any_of(m_windows.begin(), m_windows.end(), [focused_widget](const auto& entry) {
+          return entry.second.window && entry.second.window->isAncestorOf(focused_widget);
+        });
+    API::GetGui().SetDetachedScriptTextInputFocused(editing_script_text);
+  });
   connect(&m_timer, &QTimer::timeout, this, &ScriptWindowManager::Sync);
   m_timer.start(POLL_INTERVAL_MS);
 
@@ -95,6 +104,7 @@ ScriptWindowManager::ScriptWindowManager(QObject* parent) : QObject(parent)
 ScriptWindowManager::~ScriptWindowManager()
 {
   API::GetGui().SetDetachedScriptWindowFocused(false);
+  API::GetGui().SetDetachedScriptTextInputFocused(false);
   API::GetGui().SetDetachedScriptWindowsPresent(false);
   for (auto& [id, mw] : m_windows)
     delete mw.window;
@@ -397,7 +407,10 @@ void ScriptWindowManager::Sync()
         caption = new QLabel(QString::fromStdString(child.label), mw.controls_host);
         auto* edit = new QLineEdit(QString::fromStdString(child.text_value), mw.controls_host);
         const API::Gui::WidgetId cid = child.id;
-        connect(edit, &QLineEdit::textEdited, this,
+        // textChanged catches typing, paste, IME commits, and programmatic
+        // edits consistently.  Model-driven refreshes below block signals,
+        // so this remains a one-way user-edit path without feedback loops.
+        connect(edit, &QLineEdit::textChanged, this,
                 [cid](const QString& t) { API::GetGui().SetInputText(cid, t.toStdString()); });
         w = edit;
         break;
@@ -435,6 +448,17 @@ void ScriptWindowManager::Sync()
             box->setChecked(child.checked);
             box->blockSignals(false);
           }
+      if (child.kind == API::Gui::WidgetKind::InputText)
+        if (auto* edit = qobject_cast<QLineEdit*>(cit->second.control))
+        {
+          const QString desired = QString::fromStdString(child.text_value);
+          if (edit->text() != desired)
+          {
+            edit->blockSignals(true);
+            edit->setText(desired);
+            edit->blockSignals(false);
+          }
+        }
       cit->second.control->setVisible(child.visible);
       if (cit->second.caption)
         cit->second.caption->setVisible(child.visible);

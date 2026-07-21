@@ -329,7 +329,6 @@ PyScriptingBackend::~PyScriptingBackend()
   std::lock_guard lock{s_bookkeeping_lock};
   if (m_interp_threadstate == nullptr)
     return;  // we've been moved from (if moving was implemented)
-  m_gui.RemoveWidgetsForOwner(this);
   PyEval_RestoreThread(m_interp_threadstate);
   u64 interp_id = PyInterpreterState_GetID(m_interp_threadstate->interp);
 
@@ -395,6 +394,11 @@ PyScriptingBackend::~PyScriptingBackend()
     s_instances.erase(interp_id);
     Py_EndInterpreter(m_interp_threadstate);
   }
+
+  // Keep the retained GUI state alive through Python's atexit handlers and
+  // backend cleanup functions.  Removing it first makes InputText getters
+  // return empty strings during teardown, which can corrupt script settings.
+  m_gui.RemoveWidgetsForOwner(this);
 
   PyThreadState_Swap(s_main_threadstate);
   if (s_instances.empty())

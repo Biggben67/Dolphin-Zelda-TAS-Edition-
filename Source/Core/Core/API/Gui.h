@@ -151,7 +151,7 @@ public:
     bool debug_on_top = false;
     bool fullscreen = false;
     bool clean_capture = false;
-    // Clean capture controls the scene viewport. HUD composition is
+    // Clean capture controls the scene viewport.
     // independent so scripts may retain selected scene annotations.
     bool hud_visible = true;
   };
@@ -293,6 +293,14 @@ public:
   }
   bool IsDetachedScriptWindowFocused() const { return m_detached_script_window_focused.load(); }
   void SetDetachedScriptWindowFocused(bool focused) { m_detached_script_window_focused.store(focused); }
+  bool IsDetachedScriptTextInputFocused() const
+  {
+    return m_detached_script_text_input_focused.load();
+  }
+  void SetDetachedScriptTextInputFocused(bool focused)
+  {
+    m_detached_script_text_input_focused.store(focused);
+  }
   // Detached script tools should not make Dolphin's normal hotkeys unusable.
   bool HasDetachedScriptWindows() const { return m_detached_script_windows_present.load(); }
   void SetDetachedScriptWindowsPresent(bool present)
@@ -326,6 +334,7 @@ private:
   WidgetId m_next_widget_id = 1;
   std::atomic<bool> m_script_window_focused{false};  // set by video thread in RenderWidgets
   std::atomic<bool> m_detached_script_window_focused{false};  // set by ScriptWindowManager
+  std::atomic<bool> m_detached_script_text_input_focused{false};  // set by ScriptWindowManager
   std::atomic<bool> m_detached_script_windows_present{false};  // set by ScriptWindowManager
 };
 
