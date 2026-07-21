@@ -206,12 +206,14 @@ bool FFMpegFrameDump::Start(int w, int h, u64 start_ticks, const std::string& na
   m_start_time = std::time(nullptr);
   m_file_index = 0;
   m_name_prefix = name_prefix;
+  m_bitrate_multiplier = 1;
+  m_gop_size = 1;
 
   return PrepareEncoding(w, h, start_ticks, m_savestate_index);
 }
 
 bool FFMpegFrameDump::Start(int w, int h, u64 start_ticks, const FrameState& initial_state,
-                            const std::string& name_prefix)
+                            const std::string& name_prefix, int bitrate_multiplier, int gop_size)
 {
   if (IsStarted())
     return true;
@@ -220,6 +222,8 @@ bool FFMpegFrameDump::Start(int w, int h, u64 start_ticks, const FrameState& ini
   m_start_time = std::time(nullptr);
   m_file_index = 0;
   m_name_prefix = name_prefix;
+  m_bitrate_multiplier = std::max(1, bitrate_multiplier);
+  m_gop_size = std::max(1, gop_size);
 
   return PrepareEncoding(w, h, start_ticks, m_savestate_index, initial_state);
 }
@@ -335,15 +339,12 @@ bool FFMpegFrameDump::CreateVideoFile()
                m_context->height, time_base.den, time_base.num);
 
   m_context->codec->codec_type = AVMEDIA_TYPE_VIDEO;
-  m_context->codec->bit_rate = static_cast<int64_t>(Config::Get(Config::GFX_BITRATE_KBPS)) * 1000;
+  m_context->codec->bit_rate = static_cast<int64_t>(Config::Get(Config::GFX_BITRATE_KBPS)) * 1000 *
+                               m_bitrate_multiplier;
   m_context->codec->width = m_context->width;
   m_context->codec->height = m_context->height;
   m_context->codec->time_base = time_base;
-  // Keep the encoder defaults used by the regular framedump path. Manager sources are captured
-  // synchronously from the Qt thread, so forcing a large encoder worker pool or an alternate GOP
-  // profile can stall the producer even though normal dumping remains responsive.
-  m_context->codec->gop_size = 1;
-  m_context->codec->level = 1;
+  m_context->codec->gop_size = m_gop_size;
 
   AVPixelFormat pix_fmt = AV_PIX_FMT_NONE;
 

@@ -1868,19 +1868,10 @@ private:
                            FrameDumpManager::tr("The game frame source is not available."));
       return;
     }
-    constexpr u64 start_ticks = 0;
-    m_dump_start_ticks = start_ticks;
+    m_dump_start_ticks = 0;
     m_frame_count = 0;
     StopSourceDumps();
 
-    const bool dump_selected_windows = m_dump_selected_windows->isChecked();
-    if (!dump_selected_windows &&
-        !m_dump.Start(m_output_size.width(), m_output_size.height(), start_ticks, "Composite"))
-    {
-      QMessageBox::warning(m_owner, FrameDumpManager::tr("Frame Dump Manager"),
-                           FrameDumpManager::tr("The composite frame dump could not be started."));
-      return;
-    }
     m_dumping.store(true);
     UpdateGBAFrameConsumer();
     StartAudioDump();
@@ -1940,19 +1931,6 @@ private:
     }
     m_source_dumps.clear();
 #endif
-  }
-
-  u64 SyntheticTicksForFrame(u64 start_ticks, u64 frame_count, u64 fallback_ticks) const
-  {
-    Core::System& system = Core::System::GetInstance();
-    const u64 ticks_per_second = system.GetSystemTimers().GetTicksPerSecond();
-    const u64 refresh_num = system.GetVideoInterface().GetTargetRefreshRateNumerator();
-    const u64 refresh_den = system.GetVideoInterface().GetTargetRefreshRateDenominator();
-    if (ticks_per_second == 0 || refresh_num == 0 || refresh_den == 0)
-      return fallback_ticks;
-
-    return start_ticks +
-           (frame_count * ticks_per_second * refresh_den + refresh_num / 2) / refresh_num;
   }
 
   void CaptureSelectedSourceFrames(const QImage& game_frame, const FrameState& source_state,
@@ -2020,11 +1998,12 @@ private:
 
     if (!source_dump.dump->IsStarted())
     {
-      source_dump.start_ticks = 0;
+      source_dump.start_ticks = source_state.ticks;
       source_dump.frame_count = 0;
       const std::string prefix =
           std::string("FrameDumpManager/") + SanitizeDumpName(label + QStringLiteral("_") + key);
-      if (!source_dump.dump->Start(rgba.width(), rgba.height(), source_dump.start_ticks, prefix))
+      if (!source_dump.dump->Start(rgba.width(), rgba.height(), source_dump.start_ticks,
+                                   source_state, prefix))
       {
         source_dump.failed = true;
         OSD::AddMessage("Frame Dump Manager: failed to start separate dump for " +
@@ -2035,15 +2014,16 @@ private:
       }
     }
 
-    const u64 ticks =
-        SyntheticTicksForFrame(source_dump.start_ticks, source_dump.frame_count, source_state.ticks);
-
     FrameData frame;
     frame.data = rgba.constBits();
     frame.width = rgba.width();
     frame.height = rgba.height();
     frame.stride = static_cast<int>(rgba.bytesPerLine());
-    frame.state = source_dump.dump->FetchState(ticks, static_cast<int>(source_dump.frame_count));
+    // Preserve the emulated frame timestamp.  A source can be skipped while Dolphin is throttled
+    // or running at a non default speed. Treating each captured image as a consecutive frame
+    // makes the resulting video run at the host's capture rate instead of game time.
+    frame.state = source_state;
+    frame.state.frame_number = static_cast<int>(source_dump.frame_count);
     source_dump.dump->AddFrame(frame);
     if (!source_dump.dump->IsStarted())
     {
@@ -2081,16 +2061,55 @@ private:
 #endif
   }
 
-  u64 SyntheticDumpTicksForNextFrame(u64 fallback_ticks) const
+  bool HasVisibleGameSource() const
   {
-    return SyntheticTicksForFrame(m_dump_start_ticks, m_frame_count, fallback_ticks);
+    return std::ranges::any_of(m_sources, [](const auto& entry) {
+      const SourceEntry& source = entry.second;
+      return source.widget && source.composition_item->isVisible() && IsGameWidget(source.widget);
+    });
+  }
+
+  int CompositeBitrateMultiplier(const FrameState& output_state) const
+  {
+    // A 60 fps GBA can pace a composite containing a 30 fps game.Keep the configured bitrate
+    // budget per game frame in that case, otherwise every duplicated game image would receive
+    // only half the bits of a normal game dump.
+    if (!m_gba_frame_pacer_active.load() || !HasVisibleGameSource())
+      return 1;
+
+    const FrameState& game_state = m_latest_game_state;
+    if (output_state.refresh_rate_num <= 0 || output_state.refresh_rate_den <= 0 ||
+        game_state.refresh_rate_num <= 0 || game_state.refresh_rate_den <= 0)
+    {
+      return 1;
+    }
+
+    const s64 output_rate = static_cast<s64>(output_state.refresh_rate_num) *
+                            game_state.refresh_rate_den;
+    const s64 game_rate = static_cast<s64>(game_state.refresh_rate_num) *
+                          output_state.refresh_rate_den;
+    if (output_rate <= game_rate || game_rate <= 0)
+      return 1;
+
+    return static_cast<int>((output_rate + game_rate - 1) / game_rate);
+  }
+
+  int CompositeGopSize(const FrameState& output_state) const
+  {
+    if (output_state.refresh_rate_num <= 0 || output_state.refresh_rate_den <= 0)
+      return 1;
+
+    const s64 rounded_fps =
+        (static_cast<s64>(output_state.refresh_rate_num) + output_state.refresh_rate_den / 2) /
+        output_state.refresh_rate_den;
+    return std::clamp(static_cast<int>(rounded_fps * 2), 1, 240);
   }
 
   void UpdateGBAFrameConsumer()
   {
 #if defined(HAS_LIBMGBA)
-    const std::optional<int> pacer_device = m_dumping.load() ? VisibleGBAPacerDevice() :
-                                                              std::nullopt;
+    const std::optional<int> pacer_device =
+        m_dumping.load() ? VisibleGBAPacerDevice() : std::nullopt;
     m_gba_pacer_device.store(pacer_device.value_or(-1));
     m_gba_frame_pacer_active.store(pacer_device.has_value());
 
@@ -2128,12 +2147,12 @@ private:
     if (!m_dumping.load())
       return;
 
-    FrameState state;
-    state.ticks = SyntheticDumpTicksForNextFrame(ticks);
+    FrameState state = m_dump.FetchState(ticks, static_cast<int>(m_frame_count));
+    state.refresh_rate_num = 60;
+    state.refresh_rate_den = 1;
     if (IsSelectedWindowDumpMode())
       CaptureSelectedSourceFrames(m_latest_game_frame, state, device_number);
-    else if (m_dump.IsStarted() && m_gba_frame_pacer_active.load() &&
-             m_gba_pacer_device.load() == device_number)
+    else if (m_gba_frame_pacer_active.load() && m_gba_pacer_device.load() == device_number)
     {
       CaptureDumpFrame(m_latest_game_frame, state);
     }
@@ -2143,8 +2162,23 @@ private:
   void CaptureDumpFrame(const QImage& game_frame, const FrameState& source_state)
   {
 #if defined(HAVE_FFMPEG)
-    if (!m_dumping.load() || !m_dump.IsStarted())
+    if (!m_dumping.load())
       return;
+
+    if (!m_dump.IsStarted())
+    {
+      m_dump_start_ticks = source_state.ticks;
+      m_frame_count = 0;
+      if (!m_dump.Start(m_output_size.width(), m_output_size.height(), m_dump_start_ticks,
+                        source_state, "Composite", CompositeBitrateMultiplier(source_state),
+                        CompositeGopSize(source_state)))
+      {
+        OSD::AddMessage("Frame Dump Manager: the composite frame dump could not be started.",
+                        OSD::Duration::NORMAL, OSD::Color::RED);
+        StopDump();
+        return;
+      }
+    }
 
     if (m_composite_frame.size() != m_output_size ||
         m_composite_frame.format() != QImage::Format_RGBA8888)
@@ -2190,8 +2224,10 @@ private:
     frame.width = m_composite_frame.width();
     frame.height = m_composite_frame.height();
     frame.stride = static_cast<int>(m_composite_frame.bytesPerLine());
-    const u64 ticks = SyntheticDumpTicksForNextFrame(source_state.ticks);
-    frame.state = m_dump.FetchState(ticks, static_cast<int>(m_frame_count));
+    // Keep the VI timestamp supplied by FrameDumper so output timing remains tied to emulation,
+    // not to how quickly Qt can composite the manager view.
+    frame.state = source_state;
+    frame.state.frame_number = static_cast<int>(m_frame_count);
     m_dump.AddFrame(frame);
     ++m_frame_count;
     if (m_frame_count % 30 == 0)
@@ -2238,7 +2274,10 @@ private:
               const bool gba_paced = current->m_gba_frame_pacer_active.load();
               const bool selected_window_dump = current->IsSelectedWindowDumpMode();
               if (preview || gba_paced || selected_window_dump)
+              {
                 current->m_latest_game_frame = view.copy();
+                current->m_latest_game_state = state;
+              }
               if (selected_window_dump)
               {
                 current->CaptureSelectedSourceFrames(view, state, std::nullopt);
@@ -2362,6 +2401,7 @@ private:
   std::atomic<bool> m_gba_frame_pacer_active{false};
   std::atomic<int> m_gba_pacer_device{-1};
   QImage m_latest_game_frame;
+  FrameState m_latest_game_state;
   QImage m_composite_frame;
   u64 m_frame_callback_id = 0;
   u64 m_gba_frame_callback_id = 0;

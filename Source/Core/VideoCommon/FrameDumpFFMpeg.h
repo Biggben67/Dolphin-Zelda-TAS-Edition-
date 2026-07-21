@@ -45,7 +45,7 @@ public:
   // Use the frame metadata supplied by a caller that is outside the emulation thread. This avoids
   // querying the live video interface while it may be reconfiguring during a transition.
   bool Start(int w, int h, u64 start_ticks, const FrameState& initial_state,
-             const std::string& name_prefix = {});
+             const std::string& name_prefix = {}, int bitrate_multiplier = 1, int gop_size = 1);
   void AddFrame(const FrameData&);
   void Stop();
   void DoState(PointerWrap&);
@@ -72,6 +72,8 @@ private:
   std::time_t m_start_time = {};
   u32 m_file_index = 0;
   std::string m_name_prefix;
+  int m_bitrate_multiplier = 1;
+  int m_gop_size = 1;
 
   // Some codecs (like MPEG4) have a limit to this
   int64_t m_max_denominator = std::numeric_limits<s64>::max();
