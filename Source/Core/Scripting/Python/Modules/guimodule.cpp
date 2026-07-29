@@ -599,14 +599,14 @@ static PyObject* canvas_hardware_hud(PyObject* self, PyObject* args)
 static void canvas_hardware_state(PyObject* self, u64 id, float ex, float ey, float ez, float rx,
                                   float ry, float rz, float ux, float uy, float uz, float fx,
                                   float fy, float fz, float focal, float radius, float fill,
-                                  float wire, int filled, int wireframe, int enabled, int xray,
+                                  float wire, float overlay, int filled, int wireframe, int enabled, int xray,
                                   int debug_on_top, int fullscreen, int clean_capture, int hud_visible)
 {
   API::Gui::HardwareState state{};
   state.enabled = enabled != 0;
   state.eye = {ex, ey, ez}; state.right = {rx, ry, rz}; state.up = {ux, uy, uz};
   state.forward = {fx, fy, fz}; state.focal = focal; state.radius = radius;
-  state.fill_opacity = fill; state.wire_opacity = wire;
+  state.fill_opacity = fill; state.wire_opacity = wire; state.overlay_opacity = overlay;
   state.filled = filled != 0; state.wireframe = wireframe != 0;
   state.xray = xray != 0; state.debug_on_top = debug_on_top != 0; state.fullscreen = fullscreen != 0;
   state.clean_capture = clean_capture != 0;
@@ -945,12 +945,14 @@ class Canvas:
         hud.commit()
     def hardware_state(self, eye, right, up, forward, focal, radius, fill_opacity, wire_opacity,
                        filled=True, wireframe=True, enabled=True, xray=False, debug_on_top=False,
-                       fullscreen=False, clean_capture=False, hud_visible=None):
+                       fullscreen=False, clean_capture=False, hud_visible=None, overlay_opacity=None):
         if hud_visible is None:
             hud_visible = not clean_capture
+        if overlay_opacity is None:
+            overlay_opacity = fill_opacity
         _canvas_hardware_state(self._id, eye[0], eye[1], eye[2], right[0], right[1], right[2],
                                up[0], up[1], up[2], forward[0], forward[1], forward[2], focal,
-                               radius, fill_opacity, wire_opacity, int(filled), int(wireframe),
+                               radius, fill_opacity, wire_opacity, overlay_opacity, int(filled), int(wireframe),
                                int(enabled), int(xray), int(debug_on_top), int(fullscreen),
                                int(clean_capture), int(hud_visible))
     def text(self, pos, color, text):

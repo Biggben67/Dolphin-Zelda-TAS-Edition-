@@ -762,9 +762,9 @@ void ScriptHardwareMeshWidget::Render()
   // Group 7 is a retained fill-only overlay layer. It is depth-tested but
   // does not write depth in normal mode, so translucent scripted volumes do
   // not hide the scene behind them. On-top/X-ray renders it above the scene.
-  if (r.vertex_buffers[7] && r.vertex_counts[7] != 0 && s.fill_opacity > 0.0f)
+  if (r.vertex_buffers[7] && r.vertex_counts[7] != 0 && s.overlay_opacity > 0.0f)
   {
-    constants.viewport_flags[2] = s.fill_opacity;
+    constants.viewport_flags[2] = s.overlay_opacity;
     constants.viewport_flags[3] = 0.0f;
     r.context->UpdateSubresource(r.constants.Get(), 0, nullptr, &constants, 0, 0);
     r.context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -1565,12 +1565,12 @@ void ScriptHardwareMeshWidget::Render()
     }
     // Group 7 is depth-tested but does not write depth in normal mode, so
     // translucent scripted volumes do not hide scene geometry behind them.
-    if (r.vertex_buffers[7] && r.vertex_counts[7] != 0 && s.fill_opacity > 0.0f)
+    if (r.vertex_buffers[7] && r.vertex_counts[7] != 0 && s.overlay_opacity > 0.0f)
     {
       if (s.debug_on_top || s.xray)
         r.gl->glDisable(GL_DEPTH_TEST);
       r.gl->glUseProgram(r.triangle_program);
-      set_uniforms(r.triangle_program, s.fill_opacity, 0);
+      set_uniforms(r.triangle_program, s.overlay_opacity, 0);
       draw_triangles(7, 8);
     }
     if (r.vertex_buffers[5] && r.vertex_counts[5] != 0)

@@ -145,14 +145,15 @@ public:
     float radius = 0.0f;
     float fill_opacity = 1.0f;
     float wire_opacity = 1.0f;
+    // Dynamic overlay fills use a separate opacity from static scene geometry.
+    float overlay_opacity = 1.0f;
     bool filled = true;
     bool wireframe = true;
     bool xray = false;
     bool debug_on_top = false;
     bool fullscreen = false;
     bool clean_capture = false;
-    // Clean capture controls the scene viewport.
-    // independent so scripts may retain selected scene annotations.
+    // Clean capture controls the scene viewport
     bool hud_visible = true;
   };
   struct HardwareSnapshot

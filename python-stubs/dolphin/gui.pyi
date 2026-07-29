@@ -142,13 +142,15 @@ class Canvas:
     # depth-tested retained lines, 6 is above-scene triangles, 7 is a fill-only overlay layer,
     # and 8 is an always-on-top retained line list. Group 7 is depth-tested without writing depth
     # in normal mode, allowing translucent scripted volumes to reveal the scene behind them.
-    # `debug_on_top`/`xray` instead renders group 7 above the scene.
+    # `debug_on_top`/`xray` instead renders group 7 above the scene. `overlay_opacity` controls
+    # only group 7 fill. When unusued, it uses `fill_opacity` for compatibility.
     def hardware_mesh(self, group: int, positions: bytes, colors: bytes) -> None: ...
     def hardware_state(self, eye, right, up, forward, focal: float, radius: float,
                        fill_opacity: float, wire_opacity: float, filled: bool = True,
                        wireframe: bool = True, enabled: bool = True, xray: bool = False,
                        debug_on_top: bool = False, fullscreen: bool = False,
-                       clean_capture: bool = False, hud_visible: bool | None = None) -> None: ...
+                       clean_capture: bool = False, hud_visible: bool | None = None,
+                       overlay_opacity: float | None = None) -> None: ...
     def hud(self) -> HardwareHud: ...
     def hardware_hud(self, commands: Sequence[Sequence[object]]) -> None: ...
     # Compatibility helper: submits simple text commands at the top left. New scripts should use hud().
