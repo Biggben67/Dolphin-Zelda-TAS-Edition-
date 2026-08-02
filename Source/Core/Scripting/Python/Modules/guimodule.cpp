@@ -4,6 +4,13 @@
 
 #include "guimodule.h"
 
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstring>
+#include <limits>
+#include <vector>
+
 #include "Common/Logging/Log.h"
 #include "Core/API/Gui.h"
 #include "Scripting/Python/PyScriptingBackend.h"
@@ -27,6 +34,12 @@ static void clear_osd_messages(PyObject* self)
 {
   GuiModuleState* state = Py::GetState<GuiModuleState>(self);
   state->gui->ClearOSDMessages();
+}
+
+static void set_clipboard(PyObject* self, const char* text)
+{
+  GuiModuleState* state = Py::GetState<GuiModuleState>(self);
+  state->gui->SetClipboardText(std::string(text));
 }
 
 static PyObject* get_display_size(PyObject* self, PyObject* args)
@@ -171,6 +184,18 @@ static void widget_enable_canvas(PyObject* self, u64 id, int width, int height)
 {
   GuiModuleState* state = Py::GetState<GuiModuleState>(self);
   state->gui->EnableCanvas(id, width, height);
+}
+
+static void widget_enable_hardware_canvas(PyObject* self, u64 id)
+{
+  GuiModuleState* state = Py::GetState<GuiModuleState>(self);
+  state->gui->EnableHardwareCanvas(id);
+}
+
+static void widget_set_group(PyObject* self, u64 id, const char* group)
+{
+  GuiModuleState* state = Py::GetState<GuiModuleState>(self);
+  state->gui->SetChildGroup(id, std::string(group));
 }
 
 static u64 widget_button(PyObject* self, u64 parent, const char* label)
@@ -346,12 +371,263 @@ static void canvas_triangle(PyObject* self, u64 id, float ax, float ay, float bx
                         P{type, {ax, ay}, {bx, by}, {cx, cy}, 0.0f, thickness, 0.0f, color});
 }
 
-static void canvas_text(PyObject* self, u64 id, float x, float y, u32 color, const char* text)
+static void canvas_depth_triangle_filled(PyObject* self, u64 id, float ax, float ay, float az,
+                                         float bx, float by, float bz, float cx, float cy, float cz,
+                                         u32 color)
 {
   using P = API::Gui::CanvasPrimitive;
   GuiModuleState* state = Py::GetState<GuiModuleState>(self);
-  state->gui->CanvasAdd(id, P{P::Type::Text, {x, y}, {}, {}, 0.0f, 1.0f, 0.0f, color,
-                              std::string(text)});
+  P primitive{P::Type::DepthTriangleFilled, {ax, ay}, {bx, by}, {cx, cy}, 0.0f, 1.0f, 0.0f,
+              color};
+  primitive.z0 = az;
+  primitive.z1 = bz;
+  primitive.z2 = cz;
+  state->gui->CanvasAdd(id, primitive);
+}
+
+static void canvas_depth_triangle_wire(PyObject* self, u64 id, float ax, float ay, float az,
+                                       float bx, float by, float bz, float cx, float cy, float cz,
+                                       u32 color, float thickness)
+{
+  using P = API::Gui::CanvasPrimitive;
+  GuiModuleState* state = Py::GetState<GuiModuleState>(self);
+  P primitive{P::Type::DepthTriangleWire, {ax, ay}, {bx, by}, {cx, cy}, 0.0f, thickness, 0.0f,
+              color};
+  primitive.z0 = az;
+  primitive.z1 = bz;
+  primitive.z2 = cz;
+  state->gui->CanvasAdd(id, primitive);
+}
+
+static PyObject* canvas_hardware_mesh(PyObject* self, PyObject* args)
+{
+  u64 id;
+  int group;
+  PyObject *positions_obj, *colors_obj;
+  if (!PyArg_ParseTuple(args, "KiOO", &id, &group, &positions_obj, &colors_obj))
+    return nullptr;
+  Py_buffer positions{}, colors{};
+  if (PyObject_GetBuffer(positions_obj, &positions, PyBUF_CONTIG_RO) != 0)
+    return nullptr;
+  if (PyObject_GetBuffer(colors_obj, &colors, PyBUF_CONTIG_RO) != 0)
+  {
+    PyBuffer_Release(&positions);
+    return nullptr;
+  }
+  constexpr Py_ssize_t MAX_HARDWARE_VERTICES = 4'000'000;
+  const bool valid = group >= 0 && group < static_cast<int>(API::Gui::HARDWARE_MESH_GROUP_COUNT) &&
+                     positions.len % 12 == 0 &&
+                     positions.len / 12 <= MAX_HARDWARE_VERTICES &&
+                     colors.len == positions.len / 3;
+  if (!valid)
+  {
+    PyBuffer_Release(&positions);
+    PyBuffer_Release(&colors);
+    PyErr_SetString(PyExc_ValueError,
+                    "hardware mesh requires at most 4M xyz float vertices and one u32 color per vertex");
+    return nullptr;
+  }
+  const size_t count = static_cast<size_t>(positions.len) / 12;
+  std::vector<API::Gui::HardwareVertex> vertices(count);
+  const auto* pos = static_cast<const u8*>(positions.buf);
+  const auto* col = static_cast<const u8*>(colors.buf);
+  for (size_t i = 0; i < count; ++i)
+  {
+    std::memcpy(&vertices[i].x, pos + i * 12, 12);
+    std::memcpy(&vertices[i].color, col + i * 4, 4);
+  }
+  PyBuffer_Release(&positions);
+  PyBuffer_Release(&colors);
+  Py::GetState<GuiModuleState>(self)->gui->SetHardwareMesh(id, static_cast<size_t>(group),
+                                                            std::move(vertices));
+  Py_RETURN_NONE;
+}
+
+static bool GetHudFloat(PyObject* command, Py_ssize_t index, float* value)
+{
+  const double parsed = PyFloat_AsDouble(PySequence_Fast_GET_ITEM(command, index));
+  if (PyErr_Occurred() || !std::isfinite(parsed) ||
+      std::abs(parsed) > std::numeric_limits<float>::max())
+  {
+    if (!PyErr_Occurred())
+      PyErr_SetString(PyExc_ValueError, "hardware HUD coordinates must be finite numbers");
+    return false;
+  }
+  *value = static_cast<float>(parsed);
+  return true;
+}
+
+static bool GetHudNonNegativeFloat(PyObject* command, Py_ssize_t index, float* value)
+{
+  if (!GetHudFloat(command, index, value))
+    return false;
+  if (*value < 0.0f)
+  {
+    PyErr_SetString(PyExc_ValueError, "hardware HUD radii, rounding, and thickness must be non-negative");
+    return false;
+  }
+  return true;
+}
+
+static bool GetHudColor(PyObject* command, Py_ssize_t index, u32* color)
+{
+  const unsigned long parsed = PyLong_AsUnsignedLong(PySequence_Fast_GET_ITEM(command, index));
+  if (PyErr_Occurred())
+    return false;
+  if (parsed > std::numeric_limits<u32>::max())
+  {
+    PyErr_SetString(PyExc_ValueError, "hardware HUD colors must be ARGB u32 values");
+    return false;
+  }
+  *color = static_cast<u32>(parsed);
+  return true;
+}
+
+static PyObject* canvas_hardware_hud(PyObject* self, PyObject* args)
+{
+  u64 id;
+  PyObject* sequence;
+  if (!PyArg_ParseTuple(args, "KO", &id, &sequence))
+    return nullptr;
+  PyObject* commands = PySequence_Fast(sequence, "hardware HUD requires a sequence of commands");
+  if (!commands)
+    return nullptr;
+
+  constexpr Py_ssize_t MAX_HUD_COMMANDS = 16'384;
+  const Py_ssize_t count = PySequence_Fast_GET_SIZE(commands);
+  if (count > MAX_HUD_COMMANDS)
+  {
+    Py_DECREF(commands);
+    PyErr_SetString(PyExc_ValueError, "hardware HUD supports at most 16384 commands");
+    return nullptr;
+  }
+
+  using P = API::Gui::CanvasPrimitive;
+  std::vector<P> primitives;
+  primitives.reserve(static_cast<size_t>(count));
+  for (Py_ssize_t i = 0; i < count; ++i)
+  {
+    PyObject* command = PySequence_Fast(PySequence_Fast_GET_ITEM(commands, i),
+                                        "each hardware HUD command must be a sequence");
+    if (!command)
+      break;
+    const Py_ssize_t size = PySequence_Fast_GET_SIZE(command);
+    const char* kind = size > 0 ? PyUnicode_AsUTF8(PySequence_Fast_GET_ITEM(command, 0)) : nullptr;
+    P primitive{};
+    bool valid = kind != nullptr;
+    const auto point = [&](Py_ssize_t index, Vec2f* out) {
+      return GetHudFloat(command, index, &out->x) && GetHudFloat(command, index + 1, &out->y);
+    };
+    if (valid && std::strcmp(kind, "line") == 0 && size == 7)
+    {
+      primitive.type = P::Type::Line;
+      valid = point(1, &primitive.p0) && point(3, &primitive.p1) && GetHudColor(command, 5, &primitive.color) &&
+              GetHudNonNegativeFloat(command, 6, &primitive.thickness);
+    }
+    else if (valid && std::strcmp(kind, "rect") == 0 && size == 8)
+    {
+      primitive.type = P::Type::Rect;
+      valid = point(1, &primitive.p0) && point(3, &primitive.p1) && GetHudColor(command, 5, &primitive.color) &&
+              GetHudNonNegativeFloat(command, 6, &primitive.rounding) &&
+              GetHudNonNegativeFloat(command, 7, &primitive.thickness);
+    }
+    else if (valid && std::strcmp(kind, "rect_filled") == 0 && size == 7)
+    {
+      primitive.type = P::Type::RectFilled;
+      valid = point(1, &primitive.p0) && point(3, &primitive.p1) && GetHudColor(command, 5, &primitive.color) &&
+              GetHudNonNegativeFloat(command, 6, &primitive.rounding);
+    }
+    else if (valid && std::strcmp(kind, "circle") == 0 && size == 6)
+    {
+      primitive.type = P::Type::Circle;
+      valid = point(1, &primitive.p0) && GetHudNonNegativeFloat(command, 3, &primitive.radius) &&
+              GetHudColor(command, 4, &primitive.color) &&
+              GetHudNonNegativeFloat(command, 5, &primitive.thickness);
+    }
+    else if (valid && std::strcmp(kind, "circle_filled") == 0 && size == 5)
+    {
+      primitive.type = P::Type::CircleFilled;
+      valid = point(1, &primitive.p0) && GetHudNonNegativeFloat(command, 3, &primitive.radius) &&
+              GetHudColor(command, 4, &primitive.color);
+    }
+    else if (valid && std::strcmp(kind, "triangle") == 0 && size == 9)
+    {
+      primitive.type = P::Type::Triangle;
+      valid = point(1, &primitive.p0) && point(3, &primitive.p1) && point(5, &primitive.p2) &&
+              GetHudColor(command, 7, &primitive.color) &&
+              GetHudNonNegativeFloat(command, 8, &primitive.thickness);
+    }
+    else if (valid && std::strcmp(kind, "triangle_filled") == 0 && size == 8)
+    {
+      primitive.type = P::Type::TriangleFilled;
+      valid = point(1, &primitive.p0) && point(3, &primitive.p1) && point(5, &primitive.p2) &&
+              GetHudColor(command, 7, &primitive.color);
+    }
+    else if (valid && std::strcmp(kind, "text") == 0 && size == 5)
+    {
+      primitive.type = P::Type::Text;
+      const char* text = PyUnicode_AsUTF8(PySequence_Fast_GET_ITEM(command, 4));
+      valid = point(1, &primitive.p0) && GetHudColor(command, 3, &primitive.color) && text != nullptr;
+      if (valid)
+      {
+        constexpr size_t MAX_HUD_TEXT_BYTES = 16'384;
+        if (std::strlen(text) > MAX_HUD_TEXT_BYTES)
+        {
+          PyErr_SetString(PyExc_ValueError, "hardware HUD text is limited to 16384 UTF-8 bytes per command");
+          valid = false;
+        }
+        primitive.text = text;
+      }
+    }
+    else
+    {
+      valid = false;
+      PyErr_Format(PyExc_ValueError, "invalid hardware HUD command at index %zd", i);
+    }
+    Py_DECREF(command);
+    if (!valid)
+      break;
+    primitives.push_back(std::move(primitive));
+  }
+  Py_DECREF(commands);
+  if (PyErr_Occurred())
+    return nullptr;
+  Py::GetState<GuiModuleState>(self)->gui->SetHardwareHud(id, std::move(primitives));
+  Py_RETURN_NONE;
+}
+
+static void canvas_hardware_state(PyObject* self, u64 id, float ex, float ey, float ez, float rx,
+                                  float ry, float rz, float ux, float uy, float uz, float fx,
+                                  float fy, float fz, float focal, float radius, float fill,
+                                  float wire, float overlay, int filled, int wireframe, int enabled, int xray,
+                                  int debug_on_top, int fullscreen, int clean_capture, int hud_visible)
+{
+  API::Gui::HardwareState state{};
+  state.enabled = enabled != 0;
+  state.eye = {ex, ey, ez}; state.right = {rx, ry, rz}; state.up = {ux, uy, uz};
+  state.forward = {fx, fy, fz}; state.focal = focal; state.radius = radius;
+  state.fill_opacity = fill; state.wire_opacity = wire; state.overlay_opacity = overlay;
+  state.filled = filled != 0; state.wireframe = wireframe != 0;
+  state.xray = xray != 0; state.debug_on_top = debug_on_top != 0; state.fullscreen = fullscreen != 0;
+  state.clean_capture = clean_capture != 0;
+  state.hud_visible = hud_visible != 0;
+  Py::GetState<GuiModuleState>(self)->gui->SetHardwareState(id, state);
+}
+
+static void canvas_text(PyObject* self, u64 id, float x, float y, u32 color, const char* text,
+                        float text_size, const char* font_family, int text_bold)
+{
+  using P = API::Gui::CanvasPrimitive;
+  GuiModuleState* state = Py::GetState<GuiModuleState>(self);
+  P primitive{};
+  primitive.type = P::Type::Text;
+  primitive.p0 = {x, y};
+  primitive.color = color;
+  primitive.text = text;
+  primitive.text_size = std::max(1.0f, text_size);
+  primitive.font_family = font_family;
+  primitive.text_bold = text_bold != 0;
+  state->gui->CanvasAdd(id, primitive);
 }
 
 static void canvas_image(PyObject* self, u64 id, const char* path, float x, float y, float w,
@@ -401,6 +677,42 @@ static PyObject* canvas_take_right_click(PyObject* self, PyObject* args)
   return Py_BuildValue("(ff)", pos.x, pos.y);
 }
 
+static PyObject* canvas_take_capture_toggle(PyObject* self, PyObject* args)
+{
+  u64 id;
+  if (!PyArg_ParseTuple(args, "K", &id))
+    return nullptr;
+  GuiModuleState* state = Py::GetState<GuiModuleState>(self);
+  return PyBool_FromLong(state->gui->CanvasTakeCaptureToggle(id));
+}
+
+static PyObject* canvas_right_down(PyObject* self, PyObject* args)
+{
+  u64 id;
+  if (!PyArg_ParseTuple(args, "K", &id))
+    return nullptr;
+  GuiModuleState* state = Py::GetState<GuiModuleState>(self);
+  return PyBool_FromLong(state->gui->CanvasRightDown(id));
+}
+
+static PyObject* canvas_left_down(PyObject* self, PyObject* args)
+{
+  u64 id;
+  if (!PyArg_ParseTuple(args, "K", &id))
+    return nullptr;
+  GuiModuleState* state = Py::GetState<GuiModuleState>(self);
+  return PyBool_FromLong(state->gui->CanvasLeftDown(id));
+}
+
+static PyObject* canvas_key_mask(PyObject* self, PyObject* args)
+{
+  u64 id;
+  if (!PyArg_ParseTuple(args, "K", &id))
+    return nullptr;
+  GuiModuleState* state = Py::GetState<GuiModuleState>(self);
+  return PyLong_FromUnsignedLong(state->gui->CanvasKeyMask(id));
+}
+
 // Returns current canvas size as (width, height) in pixels.
 static PyObject* canvas_size(PyObject* self, PyObject* args)
 {
@@ -424,6 +736,9 @@ static void SetupGuiModule(PyObject* module, GuiModuleState* state)
   static const char pycode[] = R"(
 def add_osd_message(message: str, duration_ms: int = 2000, color_argb: int = 0xFFFFFF30):
     return _add_osd_message(message, duration_ms, color_argb)
+
+def set_clipboard(text: str):
+    _set_clipboard(text)
 
 def draw_line(a, b, color, thickness = 1):
     _draw_line(a[0], a[1], b[0], b[1], color, thickness)
@@ -515,13 +830,18 @@ class _BaseWindow:
         # Attach a drawing surface to this window; form widgets added here sit below it.
         _widget_enable_canvas(self._id, width, height)
         return Canvas(self._id, width, height)
-    def _child(self, wid, style, text_color, bg_color):
+    def enable_hardware_canvas(self):
+        # Request the native hardware canvas. CPU canvas windows remain the default.
+        _widget_enable_hardware_canvas(self._id)
+    def _child(self, wid, style, text_color, bg_color, group=None):
         if text_color is not None:
             _widget_set_text_color(wid, text_color)
         if bg_color is not None:
             _widget_set_bg_color(wid, bg_color)
         if style is not None:
             _widget_set_style(wid, style)
+        if group is not None:
+            _widget_set_group(wid, group)
         return wid
 
 class Overlay(_BaseWindow):
@@ -540,19 +860,48 @@ class Overlay(_BaseWindow):
                                      None, text_color, bg_color))
 
 class Window(_BaseWindow):
-    def button(self, label, *, style=None, text_color=None, bg_color=None):
-        return Button(self._child(_widget_button(self._id, label), style, text_color, bg_color))
-    def slider_float(self, label, min = 0.0, max = 1.0, *, style=None, text_color=None, bg_color=None):
+    def button(self, label, *, style=None, text_color=None, bg_color=None, group=None):
+        return Button(self._child(_widget_button(self._id, label), style, text_color, bg_color, group))
+    def slider_float(self, label, min = 0.0, max = 1.0, *, style=None, text_color=None, bg_color=None, group=None):
         return SliderFloat(self._child(_widget_slider_float(self._id, label, min, max),
-                                       style, text_color, bg_color))
-    def text(self, text = "", *, style=None, text_color=None, bg_color=None):
-        return Text(self._child(_widget_text(self._id, text), style, text_color, bg_color))
-    def checkbox(self, label, checked = False, *, style=None, text_color=None, bg_color=None):
+                                       style, text_color, bg_color, group))
+    def text(self, text = "", *, style=None, text_color=None, bg_color=None, group=None):
+        return Text(self._child(_widget_text(self._id, text), style, text_color, bg_color, group))
+    def checkbox(self, label, checked = False, *, style=None, text_color=None, bg_color=None, group=None):
         return Checkbox(self._child(_widget_checkbox(self._id, label, int(checked)),
-                                    style, text_color, bg_color))
-    def input_text(self, label, initial = "", *, style=None, text_color=None, bg_color=None):
+                                    style, text_color, bg_color, group))
+    def input_text(self, label, initial = "", *, style=None, text_color=None, bg_color=None, group=None):
         return InputText(self._child(_widget_input_text(self._id, label, initial),
-                                     style, text_color, bg_color))
+                                     style, text_color, bg_color, group))
+
+class HardwareHud:
+    """Retained screen-space draw list for a hardware canvas.
+
+    HUD coordinates are logical canvas pixels. Commands are composited after
+    the 3D mesh and preserve their Python order, which makes the class useful
+    for custom panels as well as simple annotations.
+    """
+    def __init__(self, canvas_id):
+        self._id = canvas_id
+        self._commands = []
+    def line(self, a, b, color, thickness = 1):
+        self._commands.append(("line", a[0], a[1], b[0], b[1], color, thickness)); return self
+    def rect(self, a, b, color, rounding = 0, thickness = 1):
+        self._commands.append(("rect", a[0], a[1], b[0], b[1], color, rounding, thickness)); return self
+    def rect_filled(self, a, b, color, rounding = 0):
+        self._commands.append(("rect_filled", a[0], a[1], b[0], b[1], color, rounding)); return self
+    def circle(self, center, radius, color, thickness = 1):
+        self._commands.append(("circle", center[0], center[1], radius, color, thickness)); return self
+    def circle_filled(self, center, radius, color):
+        self._commands.append(("circle_filled", center[0], center[1], radius, color)); return self
+    def triangle(self, a, b, c, color, thickness = 1):
+        self._commands.append(("triangle", a[0], a[1], b[0], b[1], c[0], c[1], color, thickness)); return self
+    def triangle_filled(self, a, b, c, color):
+        self._commands.append(("triangle_filled", a[0], a[1], b[0], b[1], c[0], c[1], color)); return self
+    def text(self, pos, color, text):
+        self._commands.append(("text", pos[0], pos[1], color, str(text))); return self
+    def commit(self):
+        _canvas_hardware_hud(self._id, tuple(self._commands))
 
 class Canvas:
     def __init__(self, id, width, height):
@@ -581,8 +930,42 @@ class Canvas:
         _canvas_triangle(self._id, a[0], a[1], b[0], b[1], c[0], c[1], color, 0, thickness)
     def triangle_filled(self, a, b, c, color):
         _canvas_triangle(self._id, a[0], a[1], b[0], b[1], c[0], c[1], color, 1, 1)
-    def text(self, pos, color, text):
-        _canvas_text(self._id, pos[0], pos[1], color, text)
+    def depth_triangle_filled(self, a, b, c, depths, color):
+        _canvas_depth_triangle_filled(self._id, a[0], a[1], depths[0], b[0], b[1], depths[1],
+                                      c[0], c[1], depths[2], color)
+    def depth_triangle_wire(self, a, b, c, depths, color, thickness = 1):
+        _canvas_depth_triangle_wire(self._id, a[0], a[1], depths[0], b[0], b[1], depths[1],
+                                    c[0], c[1], depths[2], color, thickness)
+    def hardware_mesh(self, group, positions, colors):
+        # positions: packed xyz float32 bytes; colors: packed ARGB u32 bytes.
+        _canvas_hardware_mesh(self._id, group, positions, colors)
+    def hud(self):
+        return HardwareHud(self._id)
+    def hardware_hud(self, commands):
+        """Commit a sequence produced by HardwareHud, or compatible commands."""
+        _canvas_hardware_hud(self._id, tuple(commands))
+    def hardware_overlay(self, lines):
+        # Compatibility shim for older scripts. New scripts should own their
+        # layout through hud(), rather than relying on a renderer-made panel.
+        hud = self.hud()
+        for i, line in enumerate(lines):
+            hud.text((12, 12 + i * 18), 0xFFE3E8F0, line)
+        hud.commit()
+    def hardware_state(self, eye, right, up, forward, focal, radius, fill_opacity, wire_opacity,
+                       filled=True, wireframe=True, enabled=True, xray=False, debug_on_top=False,
+                       fullscreen=False, clean_capture=False, hud_visible=None, overlay_opacity=None):
+        if hud_visible is None:
+            hud_visible = not clean_capture
+        if overlay_opacity is None:
+            overlay_opacity = fill_opacity
+        _canvas_hardware_state(self._id, eye[0], eye[1], eye[2], right[0], right[1], right[2],
+                               up[0], up[1], up[2], forward[0], forward[1], forward[2], focal,
+                               radius, fill_opacity, wire_opacity, overlay_opacity, int(filled), int(wireframe),
+                               int(enabled), int(xray), int(debug_on_top), int(fullscreen),
+                               int(clean_capture), int(hud_visible))
+    def text(self, pos, color, text, *, size=13, font=None, bold=False):
+        _canvas_text(self._id, pos[0], pos[1], color, text, float(size),
+                     "" if font is None else str(font), int(bool(bold)))
     def image(self, path, pos, size, *, tint=0, src=(0.0, 0.0, 1.0, 1.0)):
         # tint=0 draws the texture as-is; otherwise RGB tints it and alpha scales opacity.
         # src is a normalized (x0, y0, x1, y1) crop for partial draws (e.g. analog fills).
@@ -597,6 +980,17 @@ class Canvas:
     def take_right_click(self):
         # (x, y) of the last unconsumed right-click in canvas pixels, or None. Consumes it.
         return _canvas_take_right_click(self._id)
+    def take_capture_toggle(self):
+        return _canvas_take_capture_toggle(self._id)
+    def right_down(self):
+        # True while the canvas holds the right mouse button.
+        return _canvas_right_down(self._id)
+    def left_down(self):
+        # True while the canvas holds the left mouse button.
+        return _canvas_left_down(self._id)
+    def key_mask(self):
+        # Held W/A/S/D/Space/Shift bits for focused script canvases.
+        return _canvas_key_mask(self._id)
     def take_wheel(self):
         # Accumulated wheel notches since the last call (positive = scroll up). Consumes it.
         return _canvas_take_wheel(self._id)
@@ -636,6 +1030,7 @@ PyMODINIT_FUNC PyInit_gui()
   static PyMethodDef methods[] = {
       {"_add_osd_message", Py::as_py_func<add_osd_message>, METH_VARARGS, ""},
       {"clear_osd_messages", Py::as_py_func<clear_osd_messages>, METH_VARARGS, ""},
+      {"_set_clipboard", Py::as_py_func<set_clipboard>, METH_VARARGS, ""},
       {"get_display_size", get_display_size, METH_NOARGS, ""},
       {"_draw_line", Py::as_py_func<draw_line>, METH_VARARGS, ""},
       {"_draw_rect", Py::as_py_func<draw_rect>, METH_VARARGS, ""},
@@ -651,6 +1046,8 @@ PyMODINIT_FUNC PyInit_gui()
       {"_draw_convex_poly_filled", draw_convex_poly_filled, METH_VARARGS, ""},
       {"_widget_window", Py::as_py_func<widget_window>, METH_VARARGS, ""},
       {"_widget_enable_canvas", Py::as_py_func<widget_enable_canvas>, METH_VARARGS, ""},
+      {"_widget_enable_hardware_canvas", Py::as_py_func<widget_enable_hardware_canvas>, METH_VARARGS, ""},
+      {"_widget_set_group", Py::as_py_func<widget_set_group>, METH_VARARGS, ""},
       {"_widget_button", Py::as_py_func<widget_button>, METH_VARARGS, ""},
       {"_widget_slider_float", Py::as_py_func<widget_slider_float>, METH_VARARGS, ""},
       {"_widget_text", Py::as_py_func<widget_text>, METH_VARARGS, ""},
@@ -676,12 +1073,23 @@ PyMODINIT_FUNC PyInit_gui()
       {"_canvas_rect", Py::as_py_func<canvas_rect>, METH_VARARGS, ""},
       {"_canvas_circle", Py::as_py_func<canvas_circle>, METH_VARARGS, ""},
       {"_canvas_triangle", Py::as_py_func<canvas_triangle>, METH_VARARGS, ""},
+      {"_canvas_depth_triangle_filled", Py::as_py_func<canvas_depth_triangle_filled>, METH_VARARGS,
+       ""},
+      {"_canvas_depth_triangle_wire", Py::as_py_func<canvas_depth_triangle_wire>, METH_VARARGS,
+       ""},
+      {"_canvas_hardware_mesh", canvas_hardware_mesh, METH_VARARGS, ""},
+      {"_canvas_hardware_hud", canvas_hardware_hud, METH_VARARGS, ""},
+      {"_canvas_hardware_state", Py::as_py_func<canvas_hardware_state>, METH_VARARGS, ""},
       {"_canvas_text", Py::as_py_func<canvas_text>, METH_VARARGS, ""},
       {"_canvas_image", Py::as_py_func<canvas_image>, METH_VARARGS, ""},
       {"_canvas_size", canvas_size, METH_VARARGS, ""},
       {"_canvas_mouse_pos", canvas_mouse_pos, METH_VARARGS, ""},
       {"_canvas_take_click", canvas_take_click, METH_VARARGS, ""},
       {"_canvas_take_right_click", canvas_take_right_click, METH_VARARGS, ""},
+      {"_canvas_take_capture_toggle", canvas_take_capture_toggle, METH_VARARGS, ""},
+      {"_canvas_right_down", canvas_right_down, METH_VARARGS, ""},
+      {"_canvas_left_down", canvas_left_down, METH_VARARGS, ""},
+      {"_canvas_key_mask", canvas_key_mask, METH_VARARGS, ""},
       {"_canvas_take_wheel", Py::as_py_func<canvas_take_wheel>, METH_VARARGS, ""},
 
       {nullptr, nullptr, 0, nullptr}  // Sentinel

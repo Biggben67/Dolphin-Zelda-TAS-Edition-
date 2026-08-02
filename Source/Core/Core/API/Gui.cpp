@@ -87,7 +87,7 @@ void Gui::RenderEmbeddedCanvas(WidgetId id, int width, int height)
       dl->AddTriangleFilled(off(p.p0), off(p.p1), off(p.p2), c);
       break;
     case CanvasPrimitive::Type::Text:
-      dl->AddText(off(p.p0), c, p.text.c_str());
+      dl->AddText(nullptr, p.text_size, off(p.p0), c, p.text.c_str());
       break;
     case CanvasPrimitive::Type::Image:
       // Textures only render through the Qt canvas path, not the embedded ImGui overlay.
@@ -221,6 +221,7 @@ void Gui::CanvasCommit(WidgetId id)
 {
   std::lock_guard lock(m_widget_mutex);
   m_canvas_committed[id] = m_canvas_building[id];
+  ++m_canvas_generations[id];
 }
 
 std::vector<Gui::CanvasPrimitive> Gui::SnapshotCanvas(WidgetId id)
@@ -228,6 +229,54 @@ std::vector<Gui::CanvasPrimitive> Gui::SnapshotCanvas(WidgetId id)
   std::lock_guard lock(m_widget_mutex);
   auto it = m_canvas_committed.find(id);
   return it == m_canvas_committed.end() ? std::vector<CanvasPrimitive>{} : it->second;
+}
+
+u64 Gui::CanvasGeneration(WidgetId id)
+{
+  std::lock_guard lock(m_widget_mutex);
+  return m_canvas_generations[id];
+}
+
+void Gui::SetHardwareMesh(WidgetId id, size_t group, std::vector<HardwareVertex> vertices)
+{
+  if (group >= HARDWARE_MESH_GROUP_COUNT)
+    return;
+  std::lock_guard lock(m_widget_mutex);
+  const auto widget = m_widgets.find(id);
+  if (widget == m_widgets.end() || widget->second.kind != WidgetKind::Window || !widget->second.canvas)
+    return;
+  auto& snapshot = m_hardware_meshes[id];
+  snapshot.groups[group] = std::make_shared<const std::vector<HardwareVertex>>(std::move(vertices));
+  ++snapshot.generation;
+}
+
+void Gui::SetHardwareState(WidgetId id, const HardwareState& state)
+{
+  std::lock_guard lock(m_widget_mutex);
+  const auto widget = m_widgets.find(id);
+  if (widget == m_widgets.end() || widget->second.kind != WidgetKind::Window || !widget->second.canvas)
+    return;
+  auto& snapshot = m_hardware_meshes[id];
+  snapshot.state = state;
+  ++snapshot.generation;
+}
+
+void Gui::SetHardwareHud(WidgetId id, std::vector<CanvasPrimitive> primitives)
+{
+  std::lock_guard lock(m_widget_mutex);
+  const auto widget = m_widgets.find(id);
+  if (widget == m_widgets.end() || widget->second.kind != WidgetKind::Window || !widget->second.canvas)
+    return;
+  auto& snapshot = m_hardware_meshes[id];
+  snapshot.hud = std::make_shared<const std::vector<CanvasPrimitive>>(std::move(primitives));
+  ++snapshot.generation;
+}
+
+Gui::HardwareSnapshot Gui::SnapshotHardwareMesh(WidgetId id)
+{
+  std::lock_guard lock(m_widget_mutex);
+  const auto it = m_hardware_meshes.find(id);
+  return it == m_hardware_meshes.end() ? HardwareSnapshot{} : it->second;
 }
 
 void Gui::CanvasReportMouse(WidgetId id, float x, float y, bool inside)
@@ -255,6 +304,30 @@ void Gui::CanvasReportRightClick(WidgetId id, float x, float y)
   in.right_clicked = true;
   in.right_click_x = x;
   in.right_click_y = y;
+}
+
+void Gui::CanvasReportRightDown(WidgetId id, bool down)
+{
+  std::lock_guard lock(m_widget_mutex);
+  m_canvas_input[id].right_down = down;
+}
+
+void Gui::CanvasReportLeftDown(WidgetId id, bool down)
+{
+  std::lock_guard lock(m_widget_mutex);
+  m_canvas_input[id].left_down = down;
+}
+
+void Gui::CanvasReportKeyMask(WidgetId id, u32 mask)
+{
+  std::lock_guard lock(m_widget_mutex);
+  m_canvas_input[id].key_mask = mask;
+}
+
+void Gui::CanvasReportCaptureToggle(WidgetId id)
+{
+  std::lock_guard lock(m_widget_mutex);
+  m_canvas_input[id].capture_toggle = true;
 }
 
 void Gui::CanvasReportWheel(WidgetId id, float delta)
@@ -318,6 +391,37 @@ bool Gui::CanvasTakeRightClick(WidgetId id, Vec2f& pos)
   return true;
 }
 
+bool Gui::CanvasRightDown(WidgetId id)
+{
+  std::lock_guard lock(m_widget_mutex);
+  const auto it = m_canvas_input.find(id);
+  return it != m_canvas_input.end() && it->second.right_down;
+}
+
+bool Gui::CanvasLeftDown(WidgetId id)
+{
+  std::lock_guard lock(m_widget_mutex);
+  const auto it = m_canvas_input.find(id);
+  return it != m_canvas_input.end() && it->second.left_down;
+}
+
+u32 Gui::CanvasKeyMask(WidgetId id)
+{
+  std::lock_guard lock(m_widget_mutex);
+  const auto it = m_canvas_input.find(id);
+  return it == m_canvas_input.end() ? 0 : it->second.key_mask;
+}
+
+bool Gui::CanvasTakeCaptureToggle(WidgetId id)
+{
+  std::lock_guard lock(m_widget_mutex);
+  auto it = m_canvas_input.find(id);
+  if (it == m_canvas_input.end() || !it->second.capture_toggle)
+    return false;
+  it->second.capture_toggle = false;
+  return true;
+}
+
 float Gui::CanvasTakeWheel(WidgetId id)
 {
   std::lock_guard lock(m_widget_mutex);
@@ -357,6 +461,14 @@ void Gui::EnableCanvas(WidgetId id, int width, int height)
   it->second.canvas_h = height;
 }
 
+void Gui::EnableHardwareCanvas(WidgetId id)
+{
+  std::lock_guard lock(m_widget_mutex);
+  auto it = m_widgets.find(id);
+  if (it != m_widgets.end() && it->second.kind == WidgetKind::Window)
+    it->second.hardware_canvas = true;
+}
+
 Gui::WidgetId Gui::AddChild(WidgetId parent, WidgetKind kind, const std::string& label)
 {
   std::lock_guard lock(m_widget_mutex);
@@ -367,6 +479,14 @@ Gui::WidgetId Gui::AddChild(WidgetId parent, WidgetKind kind, const std::string&
   m_widgets[id] = Widget{kind, parent_it->second.owner, label};
   parent_it->second.children.push_back(id);
   return id;
+}
+
+void Gui::SetChildGroup(WidgetId id, const std::string& group)
+{
+  std::lock_guard lock(m_widget_mutex);
+  auto it = m_widgets.find(id);
+  if (it != m_widgets.end() && it->second.kind != WidgetKind::Window)
+    it->second.group = group;
 }
 
 bool Gui::TakeClicked(WidgetId id)
@@ -490,6 +610,22 @@ void Gui::SetStyle(WidgetId id, const std::string& style)
     it->second.style = style;
 }
 
+void Gui::SetClipboardText(std::string text)
+{
+  std::lock_guard lock(m_widget_mutex);
+  m_pending_clipboard_text = std::move(text);
+}
+
+bool Gui::TakeClipboardText(std::string& text)
+{
+  std::lock_guard lock(m_widget_mutex);
+  if (!m_pending_clipboard_text)
+    return false;
+  text = std::move(*m_pending_clipboard_text);
+  m_pending_clipboard_text.reset();
+  return true;
+}
+
 std::vector<Gui::WindowInfo> Gui::SnapshotDetachedWindows()
 {
   std::lock_guard lock(m_widget_mutex);
@@ -506,6 +642,7 @@ std::vector<Gui::WindowInfo> Gui::SnapshotDetachedWindows()
     info.bg_color = wit->second.bg_color;
     info.style = wit->second.style;
     info.canvas = wit->second.canvas;
+    info.hardware_canvas = wit->second.hardware_canvas;
     info.canvas_w = wit->second.canvas_w;
     info.canvas_h = wit->second.canvas_h;
     info.overlay = wit->second.overlay;
@@ -517,7 +654,8 @@ std::vector<Gui::WindowInfo> Gui::SnapshotDetachedWindows()
       info.children.push_back({cid, cit->second.kind, cit->second.label, cit->second.value,
                                cit->second.min, cit->second.max, cit->second.checked,
                                cit->second.text_value, cit->second.text_color,
-                               cit->second.bg_color, cit->second.style, cit->second.visible});
+                               cit->second.bg_color, cit->second.style, cit->second.group,
+                               cit->second.visible});
     }
     result.push_back(std::move(info));
   }
@@ -537,6 +675,9 @@ void Gui::RemoveWidgetsForOwner(void* owner)
   std::erase_if(m_windows, [&](WidgetId id) { return !m_widgets.contains(id); });
   std::erase_if(m_canvas_building, [&](auto& kv) { return !m_widgets.contains(kv.first); });
   std::erase_if(m_canvas_committed, [&](auto& kv) { return !m_widgets.contains(kv.first); });
+  std::erase_if(m_canvas_generations, [&](auto& kv) { return !m_widgets.contains(kv.first); });
+  std::erase_if(m_hardware_meshes, [&](auto& kv) { return !m_widgets.contains(kv.first); });
+  std::erase_if(m_canvas_input, [&](auto& kv) { return !m_widgets.contains(kv.first); });
 }
 
 Vec2f Gui::GetDisplaySize()

@@ -407,8 +407,10 @@ bool MemChecks::OverlapsMemcheck(u32 address, u32 length) const
   });
 }
 
-bool TMemCheck::Action(Core::System& system, u64 value, u32 addr, bool write, size_t size, u32 pc)
+bool TMemCheck::Action(Core::System& system, u64 value, u32 addr, bool write, size_t size, u32 pc,
+                       bool* notify)
 {
+  *notify = false;
   if (!is_enabled)
     return false;
 
@@ -422,8 +424,8 @@ bool TMemCheck::Action(Core::System& system, u64 value, u32 addr, bool write, si
                      ppc_symbol_db.GetDescription(pc), write ? "Write" : "Read", size * 8, value,
                      addr, ppc_symbol_db.GetDescription(addr));
     }
-    if (break_on_hit)
-      return true;
+    *notify = notify_on_hit;
+    return break_on_hit;
   }
   return false;
 }

@@ -11,6 +11,7 @@
 #include "Core/PowerPC/BreakPoints.h"
 #include "Core/PowerPC/PowerPC.h"
 #include "Core/System.h"
+#include "Scripting/Python/PyScriptingBackend.h"
 #include "Scripting/Python/Utils/as_py_func.h"
 #include "Scripting/Python/Utils/module.h"
 
@@ -116,6 +117,58 @@ static PyObject* SetMemoryBreakpoint(PyObject* self, PyObject* args)
   Py_RETURN_NONE;
 }
 
+// A memory watch shares the breakpoint address/range and condition syntax, but
+// reports matching accesses through event.on_memorywatch without pausing.
+static PyObject* SetMemoryWatch(PyObject* self, PyObject* args)
+{
+  PyObject* dict = PyTuple_GetItem(args, 0);
+  if (!PyDict_Check(dict))
+    return nullptr;
+
+  TMemCheck check;
+  PyObject* at_obj = PyDict_GetItemString(dict, "At");
+  PyObject* start_obj = PyDict_GetItemString(dict, "Start");
+  PyObject* end_obj = PyDict_GetItemString(dict, "End");
+  if (at_obj)
+  {
+    const u32 addr = PyLong_AsUnsignedLong(at_obj);
+    check.start_address = addr;
+    check.end_address = addr;
+  }
+  else if (start_obj && end_obj)
+  {
+    check.start_address = PyLong_AsUnsignedLong(start_obj);
+    check.end_address = PyLong_AsUnsignedLong(end_obj);
+    check.is_ranged = true;
+  }
+  else
+  {
+    ERROR_LOG_FMT(SCRIPTING, "No \"At\" or \"Start\" and \"End\" addresses provided for Memory Watch.");
+    Py_RETURN_NONE;
+  }
+
+  PyObject* watch_read_obj = PyDict_GetItemString(dict, "WatchOnRead");
+  check.is_break_on_read = watch_read_obj ? PyObject_IsTrue(watch_read_obj) : true;
+  PyObject* watch_write_obj = PyDict_GetItemString(dict, "WatchOnWrite");
+  check.is_break_on_write = watch_write_obj ? PyObject_IsTrue(watch_write_obj) : false;
+
+  PyObject* expr_obj = PyDict_GetItemString(dict, "Condition");
+  if (expr_obj)
+    check.condition = Expression::TryParse(std::string_view(PyUnicode_AsUTF8(expr_obj)));
+
+  check.notify_on_hit = true;
+  const u32 address = check.start_address;
+  Core::System::GetInstance().GetPowerPC().GetMemChecks().Add(std::move(check));
+
+  // Watches are script-owned: leaving one behind would silently slow every
+  // subsequent script by forcing the CPU's memcheck path for this address.
+  PyScriptingBackend::GetCurrent()->AddCleanupFunc([address] {
+    Core::System::GetInstance().GetPowerPC().GetMemChecks().Remove(address);
+  });
+
+  Py_RETURN_NONE;
+}
+
 static PyObject* RemoveMemoryBreakpoint(PyObject* self, PyObject* args)
 {
   auto args_opt = Py::ParseTuple<u32>(args);
@@ -139,6 +192,7 @@ PyMODINIT_FUNC PyInit_debug()
       {"remove_breakpoint", RemoveBreakpoint, METH_VARARGS, ""},
       {"set_memory_breakpoint", SetMemoryBreakpoint, METH_VARARGS, ""},
       {"remove_memory_breakpoint", RemoveMemoryBreakpoint, METH_VARARGS, ""},
+      {"set_memory_watch", SetMemoryWatch, METH_VARARGS, ""},
 
       {nullptr, nullptr, 0, nullptr}  // Sentinel
   };

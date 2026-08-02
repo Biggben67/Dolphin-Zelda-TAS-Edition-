@@ -5,9 +5,11 @@
 #pragma once
 
 #include <atomic>
+#include <array>
 #include <functional>
 #include <imgui.h>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -81,7 +83,9 @@ public:
     std::optional<u32> text_color;   // ARGB
     std::optional<u32> bg_color;     // ARGB
     std::string style;               // QSS, detached only
+    std::string group;               // Detached-window control section
     bool canvas = false;             // Window only: freeform QPainter canvas
+    bool hardware_canvas = false;    // Window only: native GPU canvas requested by the script
     int canvas_w = 0, canvas_h = 0;  // Window only
     bool overlay = false;            // Window only: frameless, stays-on-top, not user-closable
     bool visible = true;             // child widgets: hidden ones aren't rendered
@@ -100,6 +104,8 @@ public:
       CircleFilled,
       Triangle,
       TriangleFilled,
+      DepthTriangleFilled,
+      DepthTriangleWire,
       Text,
       Image,
     };
@@ -115,6 +121,58 @@ public:
     std::string image;
     Vec2f src_min{0.0f, 0.0f};
     Vec2f src_max{1.0f, 1.0f};
+    float text_size = 13.0f;
+    std::string font_family;
+    bool text_bold = false;
+    // Depth triangle primitives: camera-space depth at p0/p1/p2.  Kept at
+    // the end so existing aggregate construction stays source-compatible.
+    float z0 = 0.0f, z1 = 0.0f, z2 = 0.0f;
+  };
+
+  // Retained world-space data for a hardware-backed detached canvas. Meshes
+  // are uploaded only when their source collision changes; camera state is
+  // updated independently each frame.
+  struct HardwareVertex
+  {
+    float x, y, z;
+    u32 color;
+  };
+  // Stable script-facing mesh-layer count. Slots 0-4 are scene triangles;
+  // the remaining slots have distinct retained overlay semantics below.
+  static constexpr size_t HARDWARE_MESH_GROUP_COUNT = 9;
+  struct HardwareState
+  {
+    bool enabled = false;
+    std::array<float, 3> eye{}, right{}, up{}, forward{};
+    float focal = 1.0f;
+    float radius = 0.0f;
+    float fill_opacity = 1.0f;
+    float wire_opacity = 1.0f;
+    // Dynamic overlay fills use a separate opacity from static scene geometry.
+    float overlay_opacity = 1.0f;
+    bool filled = true;
+    bool wireframe = true;
+    bool xray = false;
+    bool debug_on_top = false;
+    bool fullscreen = false;
+    bool clean_capture = false;
+    // Clean capture controls the scene viewport/aspect. HUD composition is
+    // independent so scripts may retain selected scene annotations.
+    bool hud_visible = true;
+  };
+  struct HardwareSnapshot
+  {
+    // Script-addressable mesh slots: 0-4 are depth-writing scene triangles,
+    // 5 is a depth-tested line list, 6 is above-scene triangles, 7 is
+    // depth-tested overlay fills, and 8 is an above-scene line list. This is
+    // a rendering contract, not a game or tool identity.
+    std::array<std::shared_ptr<const std::vector<HardwareVertex>>, HARDWARE_MESH_GROUP_COUNT> groups;
+    // Script-owned screen-space HUD. The native renderer composites these
+    // retained primitives after the world mesh, so no script needs a second
+    // QWidget or a renderer-specific C++ overlay to draw an interface.
+    std::shared_ptr<const std::vector<CanvasPrimitive>> hud;
+    HardwareState state;
+    u64 generation = 0;
   };
 
   WidgetId GetOrCreateCanvas(void* owner, const std::string& title, int width, int height,
@@ -123,6 +181,11 @@ public:
   void CanvasAdd(WidgetId id, const CanvasPrimitive& prim);
   void CanvasCommit(WidgetId id);
   std::vector<CanvasPrimitive> SnapshotCanvas(WidgetId id);
+  u64 CanvasGeneration(WidgetId id);
+  void SetHardwareMesh(WidgetId id, size_t group, std::vector<HardwareVertex> vertices);
+  void SetHardwareState(WidgetId id, const HardwareState& state);
+  void SetHardwareHud(WidgetId id, std::vector<CanvasPrimitive> primitives);
+  HardwareSnapshot SnapshotHardwareMesh(WidgetId id);
 
   // Canvas pointer input: Qt widget reports (main thread), scripts consume (emu thread).
   // Click and wheel latch until read so a once-per-frame poll never misses one.
@@ -134,23 +197,48 @@ public:
     float click_x = 0.0f, click_y = 0.0f;
     bool right_clicked = false;  // latched until CanvasTakeRightClick
     float right_click_x = 0.0f, right_click_y = 0.0f;
+    bool left_down = false;
+    bool right_down = false;
+    bool capture_toggle = false;  // latched H press from the focused hardware canvas
+    u32 key_mask = 0;
     float wheel_accum = 0.0f;   // accumulated wheel notches until CanvasTakeWheel
+  };
+  enum CanvasKey : u32
+  {
+    CanvasKey_W = 1 << 0,
+    CanvasKey_A = 1 << 1,
+    CanvasKey_S = 1 << 2,
+    CanvasKey_D = 1 << 3,
+    CanvasKey_Space = 1 << 4,
+    CanvasKey_Shift = 1 << 5,
   };
   void CanvasReportMouse(WidgetId id, float x, float y, bool inside);  // Qt thread
   void CanvasReportClick(WidgetId id, float x, float y);               // Qt thread
   void CanvasReportRightClick(WidgetId id, float x, float y);          // Qt thread
+  void CanvasReportLeftDown(WidgetId id, bool down);                    // Qt thread
+  void CanvasReportRightDown(WidgetId id, bool down);                   // Qt thread
+  void CanvasReportKeyMask(WidgetId id, u32 mask);                      // Qt thread
+  void CanvasReportCaptureToggle(WidgetId id);                           // Qt thread
   void CanvasReportWheel(WidgetId id, float delta);                    // Qt thread
   void CanvasReportSize(WidgetId id, int w, int h);                    // Qt thread
   std::pair<int, int> CanvasSize(WidgetId id);                        // script thread
   Vec2f CanvasMousePos(WidgetId id, bool& inside);                     // script thread
   bool CanvasTakeClick(WidgetId id, Vec2f& pos);                       // script thread, consumes
   bool CanvasTakeRightClick(WidgetId id, Vec2f& pos);                  // script thread, consumes
+  bool CanvasLeftDown(WidgetId id);                                     // script thread
+  bool CanvasRightDown(WidgetId id);                                    // script thread
+  u32 CanvasKeyMask(WidgetId id);                                       // script thread
+  bool CanvasTakeCaptureToggle(WidgetId id);                            // script thread, consumes
   float CanvasTakeWheel(WidgetId id);                                  // script thread, consumes
 
   WidgetId GetOrCreateWindow(void* owner, const std::string& title, bool embedded = true);
   // Attaches a freeform canvas region to an existing window so it hosts a canvas and child widgets.
   void EnableCanvas(WidgetId window, int width, int height);
+  // Opt a detached canvas window into the native hardware mesh renderer.
+  // This is a script capability, not a per-tool or per-game special case.
+  void EnableHardwareCanvas(WidgetId window);
   WidgetId AddChild(WidgetId parent, WidgetKind kind, const std::string& label);
+  void SetChildGroup(WidgetId id, const std::string& group);
   bool TakeClicked(WidgetId id);
   float GetValue(WidgetId id);
   void SetValue(WidgetId id, float value);
@@ -166,6 +254,8 @@ public:
   void SetTextColor(WidgetId id, u32 color);
   void SetBgColor(WidgetId id, u32 color);
   void SetStyle(WidgetId id, const std::string& style);
+  void SetClipboardText(std::string text);
+  bool TakeClipboardText(std::string& text);  // Qt thread, consumes
   void RemoveWidgetsForOwner(void* owner);
 
   // Snapshot for the Qt detached-window manager; called from the Qt main thread.
@@ -182,6 +272,7 @@ public:
     std::optional<u32> text_color;
     std::optional<u32> bg_color;
     std::string style;
+    std::string group;
     bool visible;
   };
   struct WindowInfo
@@ -193,20 +284,40 @@ public:
     std::optional<u32> bg_color;
     std::string style;
     bool canvas = false;
+    bool hardware_canvas = false;
     int canvas_w = 0, canvas_h = 0;
     bool overlay = false;
   };
   std::vector<WindowInfo> SnapshotDetachedWindows();
 
-  // True while an embedded script window holds ImGui focus, so the input gate can treat it as transparent.
-  bool IsScriptWindowFocused() const { return m_script_window_focused.load(); }
+  // Script GUI windows are transparent to Dolphin's input gate. Detached Qt
+  // windows report their focus independently of embedded ImGui windows.
+  bool IsScriptWindowFocused() const
+  {
+    return m_script_window_focused.load() || m_detached_script_window_focused.load();
+  }
+  bool IsDetachedScriptWindowFocused() const { return m_detached_script_window_focused.load(); }
+  void SetDetachedScriptWindowFocused(bool focused) { m_detached_script_window_focused.store(focused); }
+  bool IsDetachedScriptTextInputFocused() const
+  {
+    return m_detached_script_text_input_focused.load();
+  }
+  void SetDetachedScriptTextInputFocused(bool focused)
+  {
+    m_detached_script_text_input_focused.store(focused);
+  }
+  // Detached script tools should not make Dolphin's normal hotkeys unusable.
+  bool HasDetachedScriptWindows() const { return m_detached_script_windows_present.load(); }
+  void SetDetachedScriptWindowsPresent(bool present)
+  {
+    m_detached_script_windows_present.store(present);
+  }
 
 private:
   void RenderWidgets();
   // Replays a committed canvas list at the current cursor; caller is already inside ImGui::Begin.
   void RenderEmbeddedCanvas(WidgetId id, int width, int height);
 
-private:
   // Pushing all draw calls onto a vector of functions is probably not
   // the most efficient thing in the world, but it seems to be negligible.
   // Since we want script code to be able to draw stuff whenever it wants
@@ -220,10 +331,16 @@ private:
   // Canvas primitive lists keyed by window id; building is script-side, committed is Qt-visible.
   std::map<WidgetId, std::vector<CanvasPrimitive>> m_canvas_building;
   std::map<WidgetId, std::vector<CanvasPrimitive>> m_canvas_committed;
+  std::map<WidgetId, u64> m_canvas_generations;
+  std::map<WidgetId, HardwareSnapshot> m_hardware_meshes;
   // Pointer input per canvas, written by Qt, drained by scripts.
   std::map<WidgetId, CanvasInput> m_canvas_input;
+  std::optional<std::string> m_pending_clipboard_text;
   WidgetId m_next_widget_id = 1;
   std::atomic<bool> m_script_window_focused{false};  // set by video thread in RenderWidgets
+  std::atomic<bool> m_detached_script_window_focused{false};  // set by ScriptWindowManager
+  std::atomic<bool> m_detached_script_text_input_focused{false};  // set by ScriptWindowManager
+  std::atomic<bool> m_detached_script_windows_present{false};  // set by ScriptWindowManager
 };
 
 // global instance

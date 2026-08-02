@@ -18,6 +18,7 @@
 #include "Common/Thread.h"
 
 #include "Core/AchievementManager.h"
+#include "Core/API/Gui.h"
 #include "Core/Config/FreeLookSettings.h"
 #include "Core/Config/GraphicsSettings.h"
 #include "Core/Config/MainSettings.h"
@@ -171,10 +172,22 @@ void HotkeyScheduler::Run()
     Core::System& system = Core::System::GetInstance();
     if (Core::GetState(system) != Core::State::Stopping)
     {
-      // Obey window focus (config permitting) before checking hotkeys.
-      Core::UpdateInputGate(Config::Get(Config::MAIN_FOCUSED_HOTKEYS));
+      // A focused detached script window is a Dolphin-owned tool, and
+      // Host_RendererHasFocus already recognizes it. Do not remove the focus
+      // requirement merely because a script window exists, or its hotkeys
+      // would fire globally while the user is working in another program.
+      const bool editing_script_text = API::GetGui().IsDetachedScriptTextInputFocused();
+      const bool require_hotkey_focus = Config::Get(Config::MAIN_FOCUSED_HOTKEYS) || editing_script_text;
+      Core::UpdateInputGate(require_hotkey_focus);
 
       HotkeyManagerEmu::GetStatus(false);
+
+      // A detached script's InputText is an actual text entry field.  Do not
+      // interpret its keystrokes as global emulator hotkeys, even when
+      // background hotkeys are enabled.  Other script controls retain normal
+      // Dolphin hotkey behavior.
+      if (editing_script_text)
+        continue;
 
       // Everything else on the host thread (controller config dialog) should always get input.
       ControlReference::SetInputGate(true);

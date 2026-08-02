@@ -217,14 +217,6 @@ void Presenter::ViSwap(u32 xfb_addr, u32 fb_width, u32 fb_stride, u32 fb_height,
 
     video_events.after_present_event.Trigger(present_info);
   }
-  else if (g_frame_dumper->IsFrameDumping())
-  {
-    // A skipped duplicate XFB still represents a VI presentation. Callback-only consumers such as
-    // the Frame Dump Manager need this tick so 60 Hz sources like GBA are sampled at the output FPS
-    // even when the main game only produces a new XFB every other VI.
-    ProcessFrameDumping(ticks);
-    g_frame_dumper->FlushFrameDump(ticks);
-  }
 }
 
 void Presenter::ImmediateSwap(u32 xfb_addr, u32 fb_width, u32 fb_stride, u32 fb_height)

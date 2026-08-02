@@ -121,14 +121,9 @@ bool FrameDumper::CheckFrameDumpReadbackTexture(u32 target_width, u32 target_hei
 
 void FrameDumper::FlushFrameDump()
 {
-  FlushFrameDump(Core::System::GetInstance().GetCoreTiming().GetTicks());
-}
-
-void FrameDumper::FlushFrameDump(u64 repeat_ticks)
-{
   if (!m_frame_dump_needs_flush)
   {
-    RepeatLastFrameData(repeat_ticks);
+    RepeatLastFrameData(Core::System::GetInstance().GetCoreTiming().GetTicks());
     if (!IsFrameDumping())
       StopFrameDumpThread();
     return;
