@@ -87,7 +87,7 @@ void Gui::RenderEmbeddedCanvas(WidgetId id, int width, int height)
       dl->AddTriangleFilled(off(p.p0), off(p.p1), off(p.p2), c);
       break;
     case CanvasPrimitive::Type::Text:
-      dl->AddText(off(p.p0), c, p.text.c_str());
+      dl->AddText(nullptr, p.text_size, off(p.p0), c, p.text.c_str());
       break;
     case CanvasPrimitive::Type::Image:
       // Textures only render through the Qt canvas path, not the embedded ImGui overlay.

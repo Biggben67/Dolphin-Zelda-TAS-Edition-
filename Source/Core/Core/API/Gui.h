@@ -121,6 +121,9 @@ public:
     std::string image;
     Vec2f src_min{0.0f, 0.0f};
     Vec2f src_max{1.0f, 1.0f};
+    float text_size = 13.0f;
+    std::string font_family;
+    bool text_bold = false;
     // Depth triangle primitives: camera-space depth at p0/p1/p2.  Kept at
     // the end so existing aggregate construction stays source-compatible.
     float z0 = 0.0f, z1 = 0.0f, z2 = 0.0f;
@@ -153,7 +156,8 @@ public:
     bool debug_on_top = false;
     bool fullscreen = false;
     bool clean_capture = false;
-    // Clean capture controls the scene viewport
+    // Clean capture controls the scene viewport/aspect. HUD composition is
+    // independent so scripts may retain selected scene annotations.
     bool hud_visible = true;
   };
   struct HardwareSnapshot

@@ -443,9 +443,19 @@ void ScriptCanvasWidget::paintEvent(QPaintEvent*)
     case Type::DepthTriangleWire:
       break;
     case Type::Text:
+    {
+      painter.save();
+      QFont font = painter.font();
+      if (!p.font_family.empty())
+        font.setFamily(QString::fromStdString(p.font_family));
+      font.setPixelSize(std::max(1, static_cast<int>(p.text_size)));
+      font.setBold(p.text_bold);
+      painter.setFont(font);
       painter.setPen(color);
       painter.drawText(Pt(p.p0), QString::fromStdString(p.text));
+      painter.restore();
       break;
+    }
     case Type::Image:
     {
       const QString path = QString::fromStdString(p.image);

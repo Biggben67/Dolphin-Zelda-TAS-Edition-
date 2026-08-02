@@ -614,12 +614,20 @@ static void canvas_hardware_state(PyObject* self, u64 id, float ex, float ey, fl
   Py::GetState<GuiModuleState>(self)->gui->SetHardwareState(id, state);
 }
 
-static void canvas_text(PyObject* self, u64 id, float x, float y, u32 color, const char* text)
+static void canvas_text(PyObject* self, u64 id, float x, float y, u32 color, const char* text,
+                        float text_size, const char* font_family, int text_bold)
 {
   using P = API::Gui::CanvasPrimitive;
   GuiModuleState* state = Py::GetState<GuiModuleState>(self);
-  state->gui->CanvasAdd(id, P{P::Type::Text, {x, y}, {}, {}, 0.0f, 1.0f, 0.0f, color,
-                              std::string(text)});
+  P primitive{};
+  primitive.type = P::Type::Text;
+  primitive.p0 = {x, y};
+  primitive.color = color;
+  primitive.text = text;
+  primitive.text_size = std::max(1.0f, text_size);
+  primitive.font_family = font_family;
+  primitive.text_bold = text_bold != 0;
+  state->gui->CanvasAdd(id, primitive);
 }
 
 static void canvas_image(PyObject* self, u64 id, const char* path, float x, float y, float w,
@@ -955,8 +963,9 @@ class Canvas:
                                radius, fill_opacity, wire_opacity, overlay_opacity, int(filled), int(wireframe),
                                int(enabled), int(xray), int(debug_on_top), int(fullscreen),
                                int(clean_capture), int(hud_visible))
-    def text(self, pos, color, text):
-        _canvas_text(self._id, pos[0], pos[1], color, text)
+    def text(self, pos, color, text, *, size=13, font=None, bold=False):
+        _canvas_text(self._id, pos[0], pos[1], color, text, float(size),
+                     "" if font is None else str(font), int(bool(bold)))
     def image(self, path, pos, size, *, tint=0, src=(0.0, 0.0, 1.0, 1.0)):
         # tint=0 draws the texture as-is; otherwise RGB tints it and alpha scales opacity.
         # src is a normalized (x0, y0, x1, y1) crop for partial draws (e.g. analog fills).
