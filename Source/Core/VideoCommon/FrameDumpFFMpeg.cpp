@@ -60,8 +60,7 @@ struct FrameDumpContext
   u32 savestate_index = 0;
   int initial_refresh_rate_num = 0;
   int initial_refresh_rate_den = 0;
-
-  bool gave_vfr_warning = false;
+  s64 frame_pts_step = 0;
 };
 
 namespace
@@ -408,12 +407,6 @@ bool FFMpegFrameDump::CreateVideoFile()
     return false;
   }
 
-  if (av_cmp_q(m_context->stream->time_base, time_base) != 0)
-  {
-    WARN_LOG_FMT(FRAMEDUMP, "Stream time base differs at {}/{}", m_context->stream->time_base.den,
-                 m_context->stream->time_base.num);
-  }
-
   OSD::AddMessage(fmt::format("Dumping Frames to \"{}\" ({}x{})", dump_path, m_context->width,
                               m_context->height));
   return true;
@@ -436,25 +429,27 @@ void FFMpegFrameDump::AddFrame(const FrameData& frame)
   if (!IsStarted())
     return;
 
-  const s64 pts = av_rescale_q(
+  const s64 clock_pts = av_rescale_q(
       frame.state.ticks - m_context->start_ticks,
       // TODO: GetTicksPerSecond is not safe from GPU thread.
       AVRational{1, int(Core::System::GetInstance().GetSystemTimers().GetTicksPerSecond())},
       m_context->codec->time_base);
 
+  s64 pts = 0;
   if (!IsFirstFrameInCurrentFile())
   {
-    if (pts <= m_context->last_pts)
+    if (m_context->frame_pts_step == 0)
     {
-      WARN_LOG_FMT(FRAMEDUMP, "PTS delta < 1. Current frame will not be dumped.");
-      return;
+      // The VI rate is commonly twice the rendered-frame rate. Learn the actual frame cadence
+      // from the first pair: 60 FPS uses a step of 1, while 30 FPS uses a step of 2.
+      m_context->frame_pts_step = clock_pts - m_context->last_pts;
+      if (m_context->frame_pts_step <= 0)
+      {
+        WARN_LOG_FMT(FRAMEDUMP, "PTS delta < 1. Current frame will not be dumped.");
+        return;
+      }
     }
-    else if (pts > m_context->last_pts + 1 && !m_context->gave_vfr_warning)
-    {
-      WARN_LOG_FMT(FRAMEDUMP, "PTS delta > 1. Resulting file will have variable frame rate. "
-                              "Subsequent occurrences will not be reported.");
-      m_context->gave_vfr_warning = true;
-    }
+    pts = m_context->last_pts + m_context->frame_pts_step;
   }
 
   constexpr AVPixelFormat pix_fmt = AV_PIX_FMT_RGBA;

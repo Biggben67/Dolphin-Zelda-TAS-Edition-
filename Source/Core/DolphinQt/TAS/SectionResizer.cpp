@@ -272,6 +272,15 @@ bool SectionResizer::eventFilter(QObject* watched, QEvent* event)
       (watched_widget != m_target && !m_target->isAncestorOf(watched_widget)))
     return false;
 
+  if (m_rearrange_enabled)
+  {
+    for (QObject* object = watched; object && object != m_target; object = object->parent())
+    {
+      if (object->property("tas_favorite_reorder").toBool())
+        return false;
+    }
+  }
+
   switch (event->type())
   {
   case QEvent::MouseMove:

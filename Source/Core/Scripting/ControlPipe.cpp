@@ -5,6 +5,7 @@
 
 #ifdef _WIN32
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cctype>
@@ -115,6 +116,46 @@ const char* StateToString(Core::State state)
   default:
     return "other";
   }
+}
+
+std::string HexEncode(const u8* data, size_t size)
+{
+  static constexpr char HEX[] = "0123456789abcdef";
+  std::string result;
+  result.resize(size * 2);
+  for (size_t i = 0; i < size; ++i)
+  {
+    result[i * 2] = HEX[data[i] >> 4];
+    result[i * 2 + 1] = HEX[data[i] & 0x0f];
+  }
+  return result;
+}
+
+int HexDigit(char value)
+{
+  if (value >= '0' && value <= '9')
+    return value - '0';
+  if (value >= 'a' && value <= 'f')
+    return value - 'a' + 10;
+  if (value >= 'A' && value <= 'F')
+    return value - 'A' + 10;
+  return -1;
+}
+
+bool HexDecode(std::string_view text, WiimoteEmu::SerializedWiimoteState* state)
+{
+  if ((text.size() & 1) != 0 || text.size() / 2 > state->data.size())
+    return false;
+  state->length = static_cast<u8>(text.size() / 2);
+  for (size_t i = 0; i < state->length; ++i)
+  {
+    const int high = HexDigit(text[i * 2]);
+    const int low = HexDigit(text[i * 2 + 1]);
+    if (high < 0 || low < 0)
+      return false;
+    state->data[i] = static_cast<u8>((high << 4) | low);
+  }
+  return true;
 }
 
 bool WriteRaw(HANDLE pipe, const char* buf, int len)
@@ -641,6 +682,89 @@ void HandleRequest(HANDLE pipe, const char* buf, Core::System* system)
         StateToString(state), movie.GetCurrentFrame(), movie.IsRecordingInput() ? "true" : "false",
         movie.IsPlayingInput() ? "true" : "false");
     WriteRaw(pipe, resp, len);
+  }
+  else if (CommandMatches(buf, command, "dtmmeta"))
+  {
+    auto& movie = system->GetMovie();
+    if (const auto metadata = movie.GetWiiRuntimeFrameMetadata())
+    {
+      std::string resp = "{\"ok\":true,\"kind\":\"wii\",\"row_count\":";
+      resp += std::to_string(metadata->row_count);
+      resp += ",\"current_frame\":" + std::to_string(metadata->current_frame);
+      resp += ",\"current_input_row\":" + std::to_string(metadata->current_input_row);
+      resp += ",\"data_generation\":" + std::to_string(metadata->data_generation);
+      resp += ",\"recording\":" + std::string(metadata->is_recording ? "true" : "false");
+      resp += ",\"playing\":" + std::string(metadata->is_playing ? "true" : "false");
+      resp += ",\"read_only\":" + std::string(metadata->is_read_only ? "true" : "false");
+      resp += ",\"active_wiimotes\":[";
+      for (size_t i = 0; i < metadata->active_wiimotes.size(); ++i)
+      {
+        if (i != 0)
+          resp += ',';
+        resp += metadata->active_wiimotes[i] ? "true" : "false";
+      }
+      resp += "]}\n";
+      WriteString(pipe, resp);
+    }
+    else
+    {
+      WriteResponse(pipe, false, StateToString(state));
+    }
+  }
+  else if (CommandMatches(buf, command, "dtmwiiread"))
+  {
+    u64 start = 0;
+    ParseU64Field(buf, "\"start\"", start);
+    long long requested = ParseIntField(buf, "\"count\"");
+    const u64 count = static_cast<u64>(std::clamp<long long>(requested, 1, 10000));
+    auto& movie = system->GetMovie();
+    const auto metadata = movie.GetWiiRuntimeFrameMetadata();
+    if (!metadata || start >= metadata->row_count)
+    {
+      WriteResponse(pipe, false, StateToString(state));
+    }
+    else
+    {
+      const u64 end = std::min(metadata->row_count, start + count);
+      std::string resp = "{\"ok\":true,\"start\":" + std::to_string(start) + ",\"rows\":[";
+      bool first = true;
+      for (u64 row = start; row < end; ++row)
+      {
+        const auto value = movie.GetWiiRuntimeFrameRow(row);
+        if (!value)
+          continue;
+        if (!first)
+          resp += ',';
+        first = false;
+        resp += "{\"row\":" + std::to_string(row);
+        resp += ",\"wiimote\":" + std::to_string(value->wiimote);
+        resp += ",\"reset\":" + std::string(value->is_reset ? "true" : "false");
+        resp += ",\"serialized\":\"";
+        if (!value->is_reset)
+          resp += HexEncode(value->serialized_state.data.data(), value->serialized_state.length);
+        resp += "\"}";
+      }
+      resp += "]}\n";
+      WriteString(pipe, resp);
+    }
+  }
+  else if (CommandMatches(buf, command, "dtmwiiwrite"))
+  {
+    u64 row = 0;
+    char hex[128] = {};
+    WiimoteEmu::SerializedWiimoteState serialized{};
+    const bool ok = ParseU64Field(buf, "\"row\"", row) &&
+                    ParseStringField(buf, "\"serialized\"", hex, sizeof(hex)) &&
+                    HexDecode(hex, &serialized) &&
+                    system->GetMovie().SetWiiRuntimeFrameState(row, serialized);
+    WriteResponse(pipe, ok, StateToString(state));
+  }
+  else if (CommandMatches(buf, command, "dtmsaveslot"))
+  {
+    const long long slot = ParseIntField(buf, "\"slot\"");
+    const bool ok = slot >= 0 && slot <= 99 &&
+                    State::SaveMovieToSlot(*system, static_cast<int>(slot));
+    WriteResponse(pipe, ok, StateToString(state));
   }
   else if (CommandMatches(buf, command, "pause"))
   {

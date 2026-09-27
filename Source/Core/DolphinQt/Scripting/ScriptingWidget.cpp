@@ -45,12 +45,14 @@ ScriptingWidget::ScriptingWidget(QWidget* parent)
   m_button_add_new = new QPushButton();
   m_button_reload_selected = new QPushButton();
   m_button_open_folder = new QPushButton();
+  m_button_clear_favorites = new QPushButton(tr("Clear Favorite Scripts"));
   UpdateIcons();
 
   QHBoxLayout* actions_layout = new QHBoxLayout;
   actions_layout->addWidget(m_button_add_new);
   actions_layout->addWidget(m_button_reload_selected);
   actions_layout->addWidget(m_button_open_folder);
+  actions_layout->addWidget(m_button_clear_favorites);
   QWidget* actions_widget = new QWidget;
   actions_widget->setLayout(actions_layout);
 
@@ -85,6 +87,8 @@ ScriptingWidget::ScriptingWidget(QWidget* parent)
   connect(m_button_reload_selected, &QPushButton::clicked, this,
           &ScriptingWidget::RestartSelectedScripts);
   connect(m_button_open_folder, &QPushButton::clicked, this, &ScriptingWidget::OpenScriptsFolder);
+  connect(m_button_clear_favorites, &QPushButton::clicked, this,
+          &ScriptingWidget::ClearFavoriteScripts);
   connect(&Settings::Instance(), &Settings::ThemeChanged, this, &ScriptingWidget::UpdateIcons);
   connect(m_tree, &QTreeView::doubleClicked, this, &ScriptingWidget::ToggleSelectedScripts);
   connect(m_tree, &QTreeView::clicked, this, &ScriptingWidget::OnTreeClicked);
@@ -100,6 +104,20 @@ ScriptingWidget::ScriptingWidget(QWidget* parent)
           [this] {
             m_tree->viewport()->update();
           });
+}
+
+void ScriptingWidget::ClearFavoriteScripts()
+{
+  if (ScriptFavoritesManager::Get().GetFavorites().isEmpty())
+    return;
+  if (ModalMessageBox::question(this, tr("Clear Favorite Scripts"),
+                                tr("Remove every script from the TAS favorite scripts list?"),
+                                QMessageBox::Yes | QMessageBox::No, QMessageBox::No) !=
+      QMessageBox::Yes)
+  {
+    return;
+  }
+  ScriptFavoritesManager::Get().ClearFavorites();
 }
 
 void ScriptingWidget::UpdateIcons()

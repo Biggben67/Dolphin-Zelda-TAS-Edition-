@@ -136,32 +136,58 @@ static PyObject* WiiButtonDataToPyDict(WiimoteCommon::ButtonData status) {
   );
 }
 
-static WiimoteCommon::ButtonData WiiButtonDataFromPyDict(PyObject* dict) {
-  WiimoteCommon::ButtonData status;
-  status.hex = 0;
-  PyObject* py_left = PyDict_GetItemString(dict, "Left");
-  PyObject* py_right = PyDict_GetItemString(dict, "Right");
-  PyObject* py_down = PyDict_GetItemString(dict, "Down");
-  PyObject* py_up = PyDict_GetItemString(dict, "Up");
-  PyObject* py_plus = PyDict_GetItemString(dict, "Plus");
-  PyObject* py_two = PyDict_GetItemString(dict, "Two");
-  PyObject* py_one = PyDict_GetItemString(dict, "One");
-  PyObject* py_b = PyDict_GetItemString(dict, "B");
-  PyObject* py_a = PyDict_GetItemString(dict, "A");
-  PyObject* py_minus = PyDict_GetItemString(dict, "Minus");
-  PyObject* py_home = PyDict_GetItemString(dict, "Home");
-  status.left = py_left != nullptr && PyObject_IsTrue(py_left);
-  status.right = py_right != nullptr && PyObject_IsTrue(py_right);
-  status.down = py_down != nullptr && PyObject_IsTrue(py_down);
-  status.up = py_up != nullptr && PyObject_IsTrue(py_up);
-  status.plus = py_plus != nullptr && PyObject_IsTrue(py_plus);
-  status.two = py_two != nullptr && PyObject_IsTrue(py_two);
-  status.one = py_one != nullptr && PyObject_IsTrue(py_one);
-  status.b = py_b != nullptr && PyObject_IsTrue(py_b);
-  status.a = py_a != nullptr && PyObject_IsTrue(py_a);
-  status.minus = py_minus != nullptr && PyObject_IsTrue(py_minus);
-  status.home = py_home != nullptr && PyObject_IsTrue(py_home);
+static bool HasKey(PyObject* dict, const char* key)
+{
+  return PyDict_GetItemString(dict, key) != nullptr;
+}
+
+static bool GetBool(PyObject* dict, const char* key, bool fallback)
+{
+  PyObject* value = PyDict_GetItemString(dict, key);
+  return value == nullptr ? fallback : PyObject_IsTrue(value);
+}
+
+static u8 GetU8(PyObject* dict, const char* key, u8 fallback)
+{
+  PyObject* value = PyDict_GetItemString(dict, key);
+  if (value == nullptr)
+    return fallback;
+  return static_cast<u8>(std::clamp<unsigned long>(PyLong_AsUnsignedLong(value), 0, 255));
+}
+
+static WiimoteCommon::ButtonData WiiButtonDataFromPyDict(
+    PyObject* dict, WiimoteCommon::ButtonData status)
+{
+  status.left = GetBool(dict, "Left", status.left);
+  status.right = GetBool(dict, "Right", status.right);
+  status.down = GetBool(dict, "Down", status.down);
+  status.up = GetBool(dict, "Up", status.up);
+  status.plus = GetBool(dict, "Plus", status.plus);
+  status.two = GetBool(dict, "Two", status.two);
+  status.one = GetBool(dict, "One", status.one);
+  status.b = GetBool(dict, "B", status.b);
+  status.a = GetBool(dict, "A", status.a);
+  status.minus = GetBool(dict, "Minus", status.minus);
+  status.home = GetBool(dict, "Home", status.home);
   return status;
+}
+
+static WiimoteCommon::ButtonData WiiButtonMaskFromPyDict(PyObject* dict)
+{
+  WiimoteCommon::ButtonData mask{};
+  mask.hex = 0;
+  mask.left = HasKey(dict, "Left");
+  mask.right = HasKey(dict, "Right");
+  mask.down = HasKey(dict, "Down");
+  mask.up = HasKey(dict, "Up");
+  mask.plus = HasKey(dict, "Plus");
+  mask.two = HasKey(dict, "Two");
+  mask.one = HasKey(dict, "One");
+  mask.b = HasKey(dict, "B");
+  mask.a = HasKey(dict, "A");
+  mask.minus = HasKey(dict, "Minus");
+  mask.home = HasKey(dict, "Home");
+  return mask;
 }
 
 static PyObject* NunchuckButtonDataToPyDict(WiimoteEmu::Nunchuk::DataFormat status)
@@ -173,21 +199,22 @@ static PyObject* NunchuckButtonDataToPyDict(WiimoteEmu::Nunchuk::DataFormat stat
                        "StickX", status.GetStick().value.x, "StickY", status.GetStick().value.y);
 }
 
-static WiimoteEmu::Nunchuk::DataFormat NunchuckButtonDataFromPyDict(PyObject* dict)
+static WiimoteEmu::Nunchuk::DataFormat NunchuckButtonDataFromPyDict(
+    PyObject* dict, WiimoteEmu::Nunchuk::DataFormat status)
 {
-  WiimoteEmu::Nunchuk::DataFormat status{};
   PyObject* py_c = PyDict_GetItemString(dict, "C");
   PyObject* py_z = PyDict_GetItemString(dict, "Z");
-  PyObject* py_stickx = PyDict_GetItemString(dict, "StickX");
-  PyObject* py_sticky = PyDict_GetItemString(dict, "StickY");
-  u8 buttons = 0;
-  if (py_c != nullptr && PyObject_IsTrue(py_c))
-    buttons |= WiimoteEmu::Nunchuk::BUTTON_C;
-  if (py_z != nullptr && PyObject_IsTrue(py_z))
-    buttons |= WiimoteEmu::Nunchuk::BUTTON_Z;
+  u8 buttons = status.GetButtons();
+  if (py_c != nullptr)
+    buttons = PyObject_IsTrue(py_c) ? buttons | WiimoteEmu::Nunchuk::BUTTON_C :
+                                     buttons & ~WiimoteEmu::Nunchuk::BUTTON_C;
+  if (py_z != nullptr)
+    buttons = PyObject_IsTrue(py_z) ? buttons | WiimoteEmu::Nunchuk::BUTTON_Z :
+                                     buttons & ~WiimoteEmu::Nunchuk::BUTTON_Z;
   status.SetButtons(buttons);
-  status.jx = py_stickx == nullptr ? 128 : PyLong_AsUnsignedLong(py_stickx);
-  status.jy = py_sticky == nullptr ? 128 : PyLong_AsUnsignedLong(py_sticky);
+  const auto stick = status.GetStick().value;
+  status.jx = GetU8(dict, "StickX", stick.x);
+  status.jy = GetU8(dict, "StickY", stick.y);
 
   return status;
 }
@@ -343,15 +370,45 @@ static PyObject* get_wii_buttons(PyObject* module, PyObject* args)
   return WiiButtonDataToPyDict(status);
 }
 
-static PyObject* set_wii_buttons(PyObject* module, PyObject* args)
+static PyObject* get_wii_buttons_raw(PyObject* module, PyObject* args)
+{
+  auto controller_id_opt = Py::ParseTuple<int>(args);
+  if (!controller_id_opt.has_value())
+    return nullptr;
+  const int controller_id = std::get<0>(*controller_id_opt);
+  const ControllerModuleState* state = Py::GetState<ControllerModuleState>(module);
+  return WiiButtonDataToPyDict(state->wii_buttons_manip->GetRaw(controller_id));
+}
+
+static PyObject* SetWiiButtons(PyObject* module, PyObject* args, API::ClearOn clear_on)
 {
   int controller_id;
   PyObject* dict;
   if (!PyArg_ParseTuple(args, "iO!", &controller_id, &PyDict_Type, &dict))
     return nullptr;
-  WiimoteCommon::ButtonData status = WiiButtonDataFromPyDict(dict);
   ControllerModuleState* state = Py::GetState<ControllerModuleState>(module);
-  state->wii_buttons_manip->Set(status, controller_id, API::ClearOn::NextOverride);
+  const auto status = WiiButtonDataFromPyDict(dict, state->wii_buttons_manip->Get(controller_id));
+  state->wii_buttons_manip->Set(status, WiiButtonMaskFromPyDict(dict), controller_id, clear_on);
+  Py_RETURN_NONE;
+}
+
+static PyObject* set_wii_buttons(PyObject* module, PyObject* args)
+{
+  return SetWiiButtons(module, args, API::ClearOn::NextOverride);
+}
+
+static PyObject* set_wii_buttons_for_frame(PyObject* module, PyObject* args)
+{
+  return SetWiiButtons(module, args, API::ClearOn::NextFrame);
+}
+
+static PyObject* clear_wii_buttons_override(PyObject* module, PyObject* args)
+{
+  auto controller_id_opt = Py::ParseTuple<int>(args);
+  if (!controller_id_opt.has_value())
+    return nullptr;
+  Py::GetState<ControllerModuleState>(module)->wii_buttons_manip->Clear(
+      std::get<0>(*controller_id_opt));
   Py_RETURN_NONE;
 }
 
@@ -359,9 +416,11 @@ static PyObject* set_wii_ircamera_transform(PyObject* module, PyObject* args)
 {
   int controller_id;
   float x, y;
-  float z = -2; // 2 meters away from sensor bar by default
-  float pitch, yaw, roll;
-  if (!PyArg_ParseTuple(args, "ifff|fff", &controller_id, &x, &y, &z, &pitch, &yaw, &roll))
+  float z = -2.0f;
+  float pitch = 0.0f;
+  float yaw = 0.0f;
+  float roll = 0.0f;
+  if (!PyArg_ParseTuple(args, "iff|ffff", &controller_id, &x, &y, &z, &pitch, &yaw, &roll))
     return nullptr;
   const ControllerModuleState* state = Py::GetState<ControllerModuleState>(module);
 
@@ -439,15 +498,68 @@ static PyObject* get_nunchuck_buttons_raw(PyObject* module, PyObject* args)
   return NunchuckButtonDataToPyDict(status);
 }
 
+static PyObject* SetNunchuckButtons(PyObject* module, PyObject* args, API::ClearOn clear_on);
+
 static PyObject* set_nunchuck_buttons(PyObject* module, PyObject* args)
+{
+  return SetNunchuckButtons(module, args, API::ClearOn::NextOverride);
+}
+
+static PyObject* set_nunchuck_buttons_for_frame(PyObject* module, PyObject* args)
+{
+  return SetNunchuckButtons(module, args, API::ClearOn::NextFrame);
+}
+
+static PyObject* clear_nunchuck_buttons_override(PyObject* module, PyObject* args)
+{
+  auto controller_id_opt = Py::ParseTuple<int>(args);
+  if (!controller_id_opt.has_value())
+    return nullptr;
+  Py::GetState<ControllerModuleState>(module)->nunchuck_buttons_manip->Clear(
+      std::get<0>(*controller_id_opt));
+  Py_RETURN_NONE;
+}
+
+static PyObject* clear_nunchuck_input_override(PyObject* module, PyObject* args)
+{
+  auto controller_id_opt = Py::ParseTuple<int>(args);
+  if (!controller_id_opt.has_value())
+    return nullptr;
+  const int controller_id = std::get<0>(*controller_id_opt);
+  ControllerModuleState* state = Py::GetState<ControllerModuleState>(module);
+  state->nunchuck_buttons_manip->Clear(controller_id);
+  state->nunchuck_accel_manip->Clear(controller_id);
+  Py_RETURN_NONE;
+}
+
+static PyObject* clear_wii_input_override(PyObject* module, PyObject* args)
+{
+  auto controller_id_opt = Py::ParseTuple<int>(args);
+  if (!controller_id_opt.has_value())
+    return nullptr;
+  const int controller_id = std::get<0>(*controller_id_opt);
+  ControllerModuleState* state = Py::GetState<ControllerModuleState>(module);
+  state->wii_buttons_manip->Clear(controller_id);
+  state->wii_ir_manip->Clear(controller_id);
+  state->wii_accel_manip->Clear(controller_id);
+  state->wii_motion_plus_manip->Clear(controller_id);
+  state->nunchuck_buttons_manip->Clear(controller_id);
+  state->nunchuck_accel_manip->Clear(controller_id);
+  Py_RETURN_NONE;
+}
+
+static PyObject* SetNunchuckButtons(PyObject* module, PyObject* args, API::ClearOn clear_on)
 {
   int controller_id;
   PyObject* dict;
   if (!PyArg_ParseTuple(args, "iO!", &controller_id, &PyDict_Type, &dict))
     return nullptr;
-  WiimoteEmu::Nunchuk::DataFormat status = NunchuckButtonDataFromPyDict(dict);
   ControllerModuleState* state = Py::GetState<ControllerModuleState>(module);
-  state->nunchuck_buttons_manip->Set(status, controller_id, API::ClearOn::NextOverride);
+  const auto status =
+      NunchuckButtonDataFromPyDict(dict, state->nunchuck_buttons_manip->Get(controller_id));
+  state->nunchuck_buttons_manip->Set(status, HasKey(dict, "C"), HasKey(dict, "Z"),
+                                     HasKey(dict, "StickX"), HasKey(dict, "StickY"),
+                                     controller_id, clear_on);
   Py_RETURN_NONE;
 }
 
@@ -510,7 +622,11 @@ PyMODINIT_FUNC PyInit_controller()
       {"set_gc_input_override", set_gc_input_override, METH_VARARGS, ""},
       {"clear_gc_input_override", clear_gc_input_override, METH_VARARGS, ""},
       {"get_wii_buttons", get_wii_buttons, METH_VARARGS, ""},
+      {"get_wii_buttons_raw", get_wii_buttons_raw, METH_VARARGS, ""},
       {"set_wii_buttons", set_wii_buttons, METH_VARARGS, ""},
+      {"set_wii_buttons_for_frame", set_wii_buttons_for_frame, METH_VARARGS, ""},
+      {"clear_wii_buttons_override", clear_wii_buttons_override, METH_VARARGS, ""},
+      {"clear_wii_input_override", clear_wii_input_override, METH_VARARGS, ""},
       {"set_wii_ircamera_transform", set_wii_ircamera_transform, METH_VARARGS, ""},
       {"get_wii_accelerometer", get_wii_accelerometer, METH_VARARGS, ""},
       {"set_wii_accelerometer", set_wii_accelerometer, METH_VARARGS, ""},
@@ -519,10 +635,13 @@ PyMODINIT_FUNC PyInit_controller()
       {"get_nunchuck_buttons", get_nunchuck_buttons, METH_VARARGS, ""},
       {"get_nunchuck_buttons_raw", get_nunchuck_buttons_raw, METH_VARARGS, ""},
       {"set_nunchuck_buttons", set_nunchuck_buttons, METH_VARARGS, ""},
+      {"set_nunchuck_buttons_for_frame", set_nunchuck_buttons_for_frame, METH_VARARGS, ""},
+      {"clear_nunchuck_buttons_override", clear_nunchuck_buttons_override, METH_VARARGS, ""},
+      {"clear_nunchuck_input_override", clear_nunchuck_input_override, METH_VARARGS, ""},
       {"get_nunchuck_accelerometer", get_nunchuck_accelerometer, METH_VARARGS, ""},
       {"set_nunchuck_accelerometer", set_nunchuck_accelerometer, METH_VARARGS, ""},
       Py::MakeMethodDef<Reset>("_dolphin_reset"),
-      
+
       {nullptr, nullptr, 0, nullptr}  // Sentinel
   };
   static PyModuleDef module_def =

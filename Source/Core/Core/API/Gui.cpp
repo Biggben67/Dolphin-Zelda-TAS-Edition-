@@ -610,6 +610,74 @@ void Gui::SetStyle(WidgetId id, const std::string& style)
     it->second.style = style;
 }
 
+void Gui::SetWindowGeometryPath(WidgetId id, const std::string& path)
+{
+  std::lock_guard lock(m_widget_mutex);
+  auto it = m_widgets.find(id);
+  if (it != m_widgets.end() && it->second.kind == WidgetKind::Window)
+    it->second.geometry_path = path;
+}
+
+void Gui::RequestWindowGeometrySave(WidgetId id)
+{
+  std::lock_guard lock(m_widget_mutex);
+  auto it = m_widgets.find(id);
+  if (it != m_widgets.end() && it->second.kind == WidgetKind::Window)
+    it->second.geometry_save_requested = true;
+}
+
+bool Gui::TakeWindowGeometrySaveRequest(WidgetId id)
+{
+  std::lock_guard lock(m_widget_mutex);
+  auto it = m_widgets.find(id);
+  if (it == m_widgets.end() || it->second.kind != WidgetKind::Window ||
+      !it->second.geometry_save_requested)
+  {
+    return false;
+  }
+  it->second.geometry_save_requested = false;
+  return true;
+}
+
+std::optional<Gui::WindowGeometry> Gui::GetWindowGeometry(WidgetId id)
+{
+  std::lock_guard lock(m_widget_mutex);
+  auto it = m_widgets.find(id);
+  if (it == m_widgets.end() || it->second.kind != WidgetKind::Window)
+    return std::nullopt;
+  return it->second.reported_geometry;
+}
+
+void Gui::RequestWindowGeometry(WidgetId id, const WindowGeometry& geometry)
+{
+  std::lock_guard lock(m_widget_mutex);
+  auto it = m_widgets.find(id);
+  if (it != m_widgets.end() && it->second.kind == WidgetKind::Window && geometry.width > 0 &&
+      geometry.height > 0)
+  {
+    it->second.requested_geometry = geometry;
+  }
+}
+
+std::optional<Gui::WindowGeometry> Gui::TakeWindowGeometryRequest(WidgetId id)
+{
+  std::lock_guard lock(m_widget_mutex);
+  auto it = m_widgets.find(id);
+  if (it == m_widgets.end() || it->second.kind != WidgetKind::Window)
+    return std::nullopt;
+  auto geometry = it->second.requested_geometry;
+  it->second.requested_geometry.reset();
+  return geometry;
+}
+
+void Gui::ReportWindowGeometry(WidgetId id, const WindowGeometry& geometry)
+{
+  std::lock_guard lock(m_widget_mutex);
+  auto it = m_widgets.find(id);
+  if (it != m_widgets.end() && it->second.kind == WidgetKind::Window)
+    it->second.reported_geometry = geometry;
+}
+
 void Gui::SetClipboardText(std::string text)
 {
   std::lock_guard lock(m_widget_mutex);
@@ -641,6 +709,7 @@ std::vector<Gui::WindowInfo> Gui::SnapshotDetachedWindows()
     info.text_color = wit->second.text_color;
     info.bg_color = wit->second.bg_color;
     info.style = wit->second.style;
+    info.geometry_path = wit->second.geometry_path;
     info.canvas = wit->second.canvas;
     info.hardware_canvas = wit->second.hardware_canvas;
     info.canvas_w = wit->second.canvas_w;

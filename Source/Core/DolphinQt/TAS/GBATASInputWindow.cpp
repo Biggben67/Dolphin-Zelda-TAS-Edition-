@@ -77,6 +77,8 @@ GBATASInputWindow::GBATASInputWindow(QWidget* parent, int controller_id)
   buttons_box->setLayout(buttons_layout);
 
   auto* favorites_widget = new ScriptFavoritesWidget(this);
+  connect(this, &TASInputWindow::RearrangeModeChanged, favorites_widget,
+          &ScriptFavoritesWidget::SetRearrangeEnabled);
   favorites_widget->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Preferred);
   favorites_widget->setFixedHeight(buttons_box->sizeHint().height());
 

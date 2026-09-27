@@ -612,6 +612,7 @@ void TASInputWindow::ApplyLayoutState(std::string_view state, bool restore_windo
     section.resizer->ClearCustomSize();
   }
   m_rearrange_enabled = false;
+  emit RearrangeModeChanged(false);
 
   if (use_default)
   {
@@ -1035,12 +1036,14 @@ void TASInputWindow::SetRearrangeEnabled(bool enabled)
   m_rearrange_enabled = enabled;
   for (ResizableSection& section : m_resizable_sections)
     section.resizer->SetRearrangeEnabled(enabled);
+  emit RearrangeModeChanged(enabled);
   SaveLayoutState();
 }
 
 void TASInputWindow::ResetLayout()
 {
   m_rearrange_enabled = false;
+  emit RearrangeModeChanged(false);
   m_has_custom_layout = false;
   for (ResizableSection& section : m_resizable_sections)
   {

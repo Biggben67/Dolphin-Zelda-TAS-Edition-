@@ -64,6 +64,7 @@ struct GCInputOverride
 struct WiiInputButtonsOverride
 {
   WiimoteCommon::ButtonData button_data;
+  WiimoteCommon::ButtonData mask;
   ClearOn clear_on;
   bool used;
 };
@@ -98,6 +99,10 @@ struct WiiMotionPlusOverride
 struct NunchuckButtonsOverride
 {
   WiimoteEmu::Nunchuk::DataFormat button_data;
+  bool override_c;
+  bool override_z;
+  bool override_stick_x;
+  bool override_stick_y;
   ClearOn clear_on;
   bool used;
 };
@@ -123,8 +128,11 @@ class WiiButtonsManip : public BaseManip<WiiInputButtonsOverride>
 public:
   using BaseManip::BaseManip;
   WiimoteCommon::ButtonData Get(int controller_id);
-  bool TryGetOverride(int controller_id, WiimoteCommon::ButtonData* button_data) const;
+  WiimoteCommon::ButtonData GetRaw(int controller_id) const;
+  bool ApplyOverride(int controller_id, WiimoteCommon::ButtonData* button_data);
   void Set(WiimoteCommon::ButtonData button_data, int controller_id, ClearOn clear_on);
+  void Set(WiimoteCommon::ButtonData button_data, WiimoteCommon::ButtonData mask,
+           int controller_id, ClearOn clear_on);
   void PerformInputManip(WiimoteCommon::DataReportBuilder& rpt, int controller_id);
 };
 
@@ -172,8 +180,10 @@ public:
   WiimoteEmu::Nunchuk::DataFormat Get(int controller_id);
   WiimoteEmu::Nunchuk::DataFormat GetRaw(int controller_id) const;
   void SetRaw(int controller_id, WiimoteEmu::Nunchuk::DataFormat button_data);
-  bool TryGetOverride(int controller_id, WiimoteEmu::Nunchuk::DataFormat* button_data) const;
+  bool ApplyOverride(int controller_id, WiimoteEmu::Nunchuk::DataFormat* button_data);
   void Set(WiimoteEmu::Nunchuk::DataFormat button_data, int controller_id, ClearOn clear_on);
+  void Set(WiimoteEmu::Nunchuk::DataFormat button_data, bool override_c, bool override_z,
+           bool override_stick_x, bool override_stick_y, int controller_id, ClearOn clear_on);
   void PerformInputManip(WiimoteCommon::DataReportBuilder& rpt, int controller_id,
                          WiimoteEmu::EncryptionKey key);
   void SaveNunchuckState(WiimoteCommon::DataReportBuilder& rpt,

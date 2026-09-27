@@ -14,10 +14,8 @@
 #include <QSpinBox>
 #include <QVBoxLayout>
 
-#include "Common/FileUtil.h"
-#include "Common/IniFile.h"
-
 #include "Core/HotkeyManager.h"
+#include "DolphinQt/TAS/TASSettingsStore.h"
 
 namespace
 {
@@ -114,18 +112,10 @@ QGroupBox* HotkeyTAS::CreateEssTable(const QString& title, const char* key_prefi
   layout->addWidget(new QLabel(tr("X")), 0, 1);
   layout->addWidget(new QLabel(tr("Y")), 0, 2);
 
-  Common::IniFile ini;
-  const std::string ini_path = File::GetUserPath(D_CONFIG_IDX) + "Dolphin.ini";
-  ini.Load(ini_path);
-
   for (int i = 0; i < static_cast<int>(defaults.size()); ++i)
   {
-    int x = defaults[i].first;
-    int y = defaults[i].second;
-    ini.GetIfExists("TAS", std::string(key_prefix) + std::to_string(i) + "X", &x);
-    ini.GetIfExists("TAS", std::string(key_prefix) + std::to_string(i) + "Y", &y);
-    x = std::clamp(x, 0, 255);
-    y = std::clamp(y, 0, 255);
+    const auto [x, y] =
+        TASSettingsStore::ReadEssPreset(key_prefix, i, defaults[i].first, defaults[i].second);
 
     auto* label = new QLabel(tr(k_ess_labels[i]));
     auto* x_value = new QSpinBox;
@@ -153,11 +143,5 @@ QGroupBox* HotkeyTAS::CreateEssTable(const QString& title, const char* key_prefi
 
 void HotkeyTAS::SaveEssPreset(const char* key_prefix, int index, int x, int y)
 {
-  Common::IniFile ini;
-  const std::string ini_path = File::GetUserPath(D_CONFIG_IDX) + "Dolphin.ini";
-  ini.Load(ini_path);
-  auto* section = ini.GetOrCreateSection("TAS");
-  section->Set(std::string(key_prefix) + std::to_string(index) + "X", x);
-  section->Set(std::string(key_prefix) + std::to_string(index) + "Y", y);
-  ini.Save(ini_path);
+  TASSettingsStore::WriteEssPreset(key_prefix, index, x, y);
 }

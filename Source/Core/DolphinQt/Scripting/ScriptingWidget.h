@@ -27,6 +27,7 @@ public:
   void RestartSelectedScripts();
   void ToggleSelectedScripts();
   void ToggleFavorite(const QModelIndex& index);
+  void ClearFavoriteScripts();
 
 protected:
   void closeEvent(QCloseEvent*) override;
@@ -45,6 +46,7 @@ private:
   QPushButton* m_button_add_new;
   QPushButton* m_button_reload_selected;
   QPushButton* m_button_open_folder;
+  QPushButton* m_button_clear_favorites;
   QGroupBox* m_scripts_group;
 
   ScriptsFileSystemModel* m_scripts_model;

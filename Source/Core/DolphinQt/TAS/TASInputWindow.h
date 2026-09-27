@@ -69,6 +69,9 @@ public:
   std::string GetLayoutState() const;
   void ApplyLayoutState(std::string_view state, bool restore_window_size = false);
 
+signals:
+  void RearrangeModeChanged(bool enabled);
+
 protected:
   virtual void UpdateLiveInputDisplay() = 0;
 
