@@ -60,7 +60,6 @@ struct FrameDumpContext
   u32 savestate_index = 0;
   int initial_refresh_rate_num = 0;
   int initial_refresh_rate_den = 0;
-  s64 frame_pts_step = 0;
 };
 
 namespace
@@ -343,6 +342,7 @@ bool FFMpegFrameDump::CreateVideoFile()
   m_context->codec->width = m_context->width;
   m_context->codec->height = m_context->height;
   m_context->codec->time_base = time_base;
+  m_context->codec->framerate = av_inv_q(time_base);
   m_context->codec->gop_size = m_gop_size;
 
   AVPixelFormat pix_fmt = AV_PIX_FMT_NONE;
@@ -398,6 +398,7 @@ bool FFMpegFrameDump::CreateVideoFile()
   }
 
   m_context->stream->time_base = m_context->codec->time_base;
+  m_context->stream->avg_frame_rate = m_context->codec->framerate;
 
   NOTICE_LOG_FMT(FRAMEDUMP, "Opening file {} for dumping", dump_path);
   if (avio_open(&m_context->format->pb, dump_path.c_str(), AVIO_FLAG_WRITE) < 0 ||
@@ -429,27 +430,42 @@ void FFMpegFrameDump::AddFrame(const FrameData& frame)
   if (!IsStarted())
     return;
 
-  const s64 clock_pts = av_rescale_q(
-      frame.state.ticks - m_context->start_ticks,
-      // TODO: GetTicksPerSecond is not safe from GPU thread.
-      AVRational{1, int(Core::System::GetInstance().GetSystemTimers().GetTicksPerSecond())},
-      m_context->codec->time_base);
+  const s64 target_pts = std::max<s64>(
+      0, av_rescale_q_rnd(
+             frame.state.ticks - m_context->start_ticks,
+             // TODO: GetTicksPerSecond is not safe from GPU thread.
+             AVRational{1,
+                        int(Core::System::GetInstance().GetSystemTimers().GetTicksPerSecond())},
+             m_context->codec->time_base,
+             static_cast<AVRounding>(AV_ROUND_DOWN | AV_ROUND_PASS_MINMAX)));
 
-  s64 pts = 0;
+  // Multiple presentations can refer to the same output frame. Keeping only the latest completed
+  // CFR slot avoids duplicate-XFB settings changing the dump rate.
+  if (!IsFirstFrameInCurrentFile() && target_pts <= m_context->last_pts)
+    return;
+
+  const auto encode_scaled_frame = [this](s64 pts) {
+    m_context->scaled_frame->pts = pts;
+    if (const int error = avcodec_send_frame(m_context->codec, m_context->scaled_frame))
+    {
+      ERROR_LOG_FMT(FRAMEDUMP, "Error while encoding video: {}", AVErrorString(error));
+      return false;
+    }
+
+    ProcessPackets();
+    m_context->last_pts = pts;
+    return true;
+  };
+
+  // If no new XFB was submitted for one or more emulated frame slots, repeat the previous image.
+  // This preserves exact emulated duration without introducing variable-rate timestamps.
   if (!IsFirstFrameInCurrentFile())
   {
-    if (m_context->frame_pts_step == 0)
+    for (s64 pts = m_context->last_pts + 1; pts < target_pts; ++pts)
     {
-      // The VI rate is commonly twice the rendered-frame rate. Learn the actual frame cadence
-      // from the first pair: 60 FPS uses a step of 1, while 30 FPS uses a step of 2.
-      m_context->frame_pts_step = clock_pts - m_context->last_pts;
-      if (m_context->frame_pts_step <= 0)
-      {
-        WARN_LOG_FMT(FRAMEDUMP, "PTS delta < 1. Current frame will not be dumped.");
+      if (!encode_scaled_frame(pts))
         return;
-      }
     }
-    pts = m_context->last_pts + m_context->frame_pts_step;
   }
 
   constexpr AVPixelFormat pix_fmt = AV_PIX_FMT_RGBA;
@@ -460,26 +476,34 @@ void FFMpegFrameDump::AddFrame(const FrameData& frame)
   m_context->src_frame->width = m_context->width;
   m_context->src_frame->height = m_context->height;
 
-  // Convert image from RGBA to desired pixel format.
-  m_context->sws = sws_getCachedContext(
-      m_context->sws, frame.width, frame.height, pix_fmt, m_context->width, m_context->height,
-      m_context->codec->pix_fmt, SWS_BICUBIC, nullptr, nullptr, nullptr);
-  if (m_context->sws)
+  // Convert the newly submitted image after filling gaps, while scaled_frame still held the
+  // previous image.
+  if (const int error = av_frame_make_writable(m_context->scaled_frame); error < 0)
   {
-    sws_scale(m_context->sws, m_context->src_frame->data, m_context->src_frame->linesize, 0,
-              frame.height, m_context->scaled_frame->data, m_context->scaled_frame->linesize);
-  }
-
-  m_context->last_pts = pts;
-  m_context->scaled_frame->pts = pts;
-
-  if (const int error = avcodec_send_frame(m_context->codec, m_context->scaled_frame))
-  {
-    ERROR_LOG_FMT(FRAMEDUMP, "Error while encoding video: {}", AVErrorString(error));
+    ERROR_LOG_FMT(FRAMEDUMP, "Could not make video frame writable: {}", AVErrorString(error));
     return;
   }
 
-  ProcessPackets();
+  m_context->sws = sws_getCachedContext(
+      m_context->sws, frame.width, frame.height, pix_fmt, m_context->width, m_context->height,
+      m_context->codec->pix_fmt, SWS_BICUBIC, nullptr, nullptr, nullptr);
+  if (!m_context->sws)
+  {
+    ERROR_LOG_FMT(FRAMEDUMP, "Could not create frame conversion context");
+    return;
+  }
+
+  sws_scale(m_context->sws, m_context->src_frame->data, m_context->src_frame->linesize, 0,
+            frame.height, m_context->scaled_frame->data, m_context->scaled_frame->linesize);
+
+  // A dump started at boot can receive its first image after timestamp zero. Repeat that image
+  // backward to zero so video remains aligned with the separately dumped audio.
+  const s64 first_pts = IsFirstFrameInCurrentFile() ? 0 : target_pts;
+  for (s64 pts = first_pts; pts <= target_pts; ++pts)
+  {
+    if (!encode_scaled_frame(pts))
+      return;
+  }
 }
 
 void FFMpegFrameDump::ProcessPackets()
@@ -605,7 +629,8 @@ void FFMpegFrameDump::CheckForConfigChange(const FrameData& frame)
   }
 }
 
-FrameState FFMpegFrameDump::FetchState(u64 ticks, int frame_number) const
+FrameState FFMpegFrameDump::FetchState(u64 ticks, int frame_number,
+                                       int refresh_rate_divisor) const
 {
   FrameState state;
   state.ticks = ticks;
@@ -613,8 +638,13 @@ FrameState FFMpegFrameDump::FetchState(u64 ticks, int frame_number) const
   state.savestate_index = m_savestate_index;
 
   const auto time_base = GetTimeBaseForCurrentRefreshRate(m_max_denominator);
-  state.refresh_rate_num = time_base.den;
-  state.refresh_rate_den = time_base.num;
+  int reduced_num;
+  int reduced_den;
+  av_reduce(&reduced_num, &reduced_den,
+            static_cast<s64>(time_base.num) * std::max(1, refresh_rate_divisor), time_base.den,
+            m_max_denominator);
+  state.refresh_rate_num = reduced_den;
+  state.refresh_rate_den = reduced_num;
   return state;
 }
 

@@ -159,6 +159,14 @@ private:
   u64 m_frame_count = 0;
   u64 m_present_count = 0;
 
+  // Number of VI presentations per distinct XFB frame. This keeps frame dumps at the game's
+  // rendered rate (for example 29.97 FPS for a 59.94 Hz game that updates every other VI).
+  std::array<u8, 16> m_frame_cadence_samples{};
+  u8 m_frame_cadence_sample_count = 0;
+  u8 m_frame_cadence_sample_index = 0;
+  u8 m_presents_since_unique_frame = 0;
+  u8 m_frame_dump_refresh_rate_divisor = 1;
+
   // XFB tracking
   u64 m_last_xfb_ticks = 0;
   u32 m_last_xfb_addr = 0;
