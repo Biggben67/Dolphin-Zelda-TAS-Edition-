@@ -5,8 +5,8 @@
 
 #include <QGroupBox>
 
-class QListWidget;
 class QListWidgetItem;
+class FavoriteScriptsList;
 
 class ScriptFavoritesWidget : public QGroupBox
 {
@@ -14,12 +14,13 @@ class ScriptFavoritesWidget : public QGroupBox
 
 public:
   explicit ScriptFavoritesWidget(QWidget* parent = nullptr);
+  void SetRearrangeEnabled(bool enabled);
 
 private:
   void Reload();
   void OnItemChanged(QListWidgetItem* item);
   QString GetDisplayPath(const QString& absolute_path) const;
 
-  QListWidget* m_list;
+  FavoriteScriptsList* m_list;
   bool m_updating = false;
 };

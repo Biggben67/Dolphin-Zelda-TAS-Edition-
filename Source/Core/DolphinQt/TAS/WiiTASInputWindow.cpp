@@ -43,6 +43,7 @@
 #include "DolphinQt/Scripting/ScriptFavoritesWidget.h"
 #include "DolphinQt/TAS/IRWidget.h"
 #include "DolphinQt/TAS/StickWidget.h"
+#include "DolphinQt/TAS/TASSettingsStore.h"
 #include "DolphinQt/TAS/TASCheckBox.h"
 #include "DolphinQt/TAS/TASSlider.h"
 #include "DolphinQt/TAS/TASSpinBox.h"
@@ -670,6 +671,8 @@ WiiTASInputWindow::WiiTASInputWindow(QWidget* parent, int num) : TASInputWindow(
   m_reset_box->setLayout(reset_layout);
 
   m_favorites_widget = new ScriptFavoritesWidget(this);
+  connect(this, &TASInputWindow::RearrangeModeChanged, m_favorites_widget,
+          &ScriptFavoritesWidget::SetRearrangeEnabled);
   m_favorites_widget->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Preferred);
   SetDefaultContentLayoutBuilder([this] {
     auto* top_layout = new QHBoxLayout;
@@ -764,17 +767,9 @@ void WiiTASInputWindow::ApplyNunchukEssPreset(int preset_index)
   if (preset_index < 0 || preset_index >= static_cast<int>(k_default_nunchuk_ess.size()))
     return;
 
-  int x = k_default_nunchuk_ess[preset_index].x;
-  int y = k_default_nunchuk_ess[preset_index].y;
-
-  Common::IniFile ini;
-  const std::string ini_path = File::GetUserPath(D_CONFIG_IDX) + "Dolphin.ini";
-  ini.Load(ini_path);
-  ini.GetIfExists("TAS", "NunchukEss" + std::to_string(preset_index) + "X", &x);
-  ini.GetIfExists("TAS", "NunchukEss" + std::to_string(preset_index) + "Y", &y);
-
-  x = std::clamp(x, 0, 255);
-  y = std::clamp(y, 0, 255);
+  const auto [x, y] = TASSettingsStore::ReadEssPreset(
+      "NunchukEss", preset_index, k_default_nunchuk_ess[preset_index].x,
+      k_default_nunchuk_ess[preset_index].y);
 
   m_nunchuk_stick_x_value->setValue(x);
   m_nunchuk_stick_y_value->setValue(y);

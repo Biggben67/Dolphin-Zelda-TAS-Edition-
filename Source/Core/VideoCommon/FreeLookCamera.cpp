@@ -408,143 +408,130 @@ bool IsLikelyViewMatrix(const Common::Matrix44& matrix)
          std::abs(normalized_up.Dot(normalized_look)) < 0.25f;
 }
 
-bool ReadSkywardSwordCameraFromScnRootPointer(const Core::CPUThreadGuard& guard,
-                                             u32 scn_root_pointer_address,
-                                             FocusTargetSample* sample)
-{
-  static constexpr u32 CAMERA_MATRIX_OFFSET = 0xF8;
-  const std::optional<u32> scn_root_address =
-      ReadU32FromMemory(guard, scn_root_pointer_address);
-  if (!scn_root_address || *scn_root_address < 0x80000000 || *scn_root_address > 0x90000000)
-    return false;
-
-  const std::optional<Common::Matrix44> view_matrix =
-      ReadViewMatrixFromMemoryAddress(guard, *scn_root_address + CAMERA_MATRIX_OFFSET);
-  if (!view_matrix || !IsLikelyViewMatrix(*view_matrix))
-    return false;
-
-  const std::optional<Common::Vec3> eye = GetEyeFromViewMatrix(*view_matrix);
-  const std::optional<Common::Vec3> up = GetUpFromViewMatrix(*view_matrix);
-  Common::Vec3 look{view_matrix->data[8], view_matrix->data[9], view_matrix->data[10]};
-  if (!eye || !up || look.Length() < 0.0001f)
-    return false;
-
-  look = look.Normalized();
-  sample->game_view_matrix = view_matrix;
-  sample->camera_eye = eye;
-  sample->camera_center = *eye - look;
-  sample->camera_up = up;
-  return true;
-}
-
-bool ReadSkywardSwordCamera(const Core::CPUThreadGuard& guard, std::string_view game_id,
-                            FocusTargetSample* sample)
-{
-  struct SupportedScnRoot
-  {
-    std::string_view game_id;
-    u32 scn_root_pointer_address;
-  };
-
-  static constexpr SupportedScnRoot supported_scn_roots[] = {
-      {"SOUE01", 0x80575BD4},
-      {"SOUJ01", 0x80578E34},
-  };
-
-  const auto it = std::ranges::find_if(supported_scn_roots, [game_id](const auto& entry) {
-    return game_id == entry.game_id;
-  });
-  if (it != std::end(supported_scn_roots) &&
-      ReadSkywardSwordCameraFromScnRootPointer(guard, it->scn_root_pointer_address, sample))
-  {
-    return true;
-  }
-
-  if (!game_id.starts_with("SOU"))
-    return false;
-
-  static std::string s_cached_game_id;
-  static std::optional<u32> s_cached_scn_root_pointer_address;
-  if (s_cached_game_id == game_id && s_cached_scn_root_pointer_address &&
-      ReadSkywardSwordCameraFromScnRootPointer(guard, *s_cached_scn_root_pointer_address, sample))
-  {
-    return true;
-  }
-
-  s_cached_game_id = std::string(game_id);
-  s_cached_scn_root_pointer_address.reset();
-
-  // PAL symbols are not available in the local SS decomp. Restrict the fallback scan to the small
-  // data range where l_scnRoot_p lives in the verified US/JP builds, then cache the first valid hit.
-  for (u32 address = 0x80570000; address <= 0x80590000; address += sizeof(u32))
-  {
-    if (ReadSkywardSwordCameraFromScnRootPointer(guard, address, sample))
-    {
-      s_cached_scn_root_pointer_address = address;
-      return true;
-    }
-  }
-
-  return false;
-}
-
 void ReadSupportedGameCamera(const Core::CPUThreadGuard& guard, FocusTargetSample* sample)
 {
   if (!sample)
     return;
 
-  struct SupportedView
+  enum class CameraSource
   {
-    std::string_view game_id;
-    u32 game_info_address;
-    u32 play_offset;
-    u32 camera_info_camera_offset;
-    u32 current_view_offset;
+    ViewClass,
+    MatrixPointer,
   };
 
-  // Zelda titles using dComIfG expose the active view_class* through gameInfo.play.mCurrentView.
-  // The view matrix is view_class::viewMtx at +0x140, so focus targets only need XYZ watches.
-  static constexpr SupportedView supported_views[] = {
+  struct SupportedGame
+  {
+    std::string_view game_id_prefix;
+    CameraSource source;
+    u32 root_address;
+    u32 play_offset = 0;
+    u32 camera_info_camera_offset = 0;
+    u32 current_view_offset = 0;
+  };
+
+  static constexpr SupportedGame supported_games[] = {
       // Twilight Princess
-      {"GZ2E01", 0x804061C0, 0x0F38, 0x4E3C, 0x5010},
-      {"GZ2P01", 0x80408160, 0x0F38, 0x4E3C, 0x5010},
-      {"GZ2J01", 0x80400300, 0x0F38, 0x4E3C, 0x5010},
+      {"GZ2E", CameraSource::ViewClass, 0x804061C0, 0x0F38, 0x4E3C, 0x5010},
+      {"GZ2P", CameraSource::ViewClass, 0x80408160, 0x0F38, 0x4E3C, 0x5010},
+      {"GZ2J", CameraSource::ViewClass, 0x80400300, 0x0F38, 0x4E3C, 0x5010},
       // The Wind Waker
-      {"GZLE01", 0x803C4C08, 0x12A0, 0x4870, 0x4A58},
-      {"GZLP01", 0x803CC530, 0x12A0, 0x4870, 0x4A58},
-      {"GZLJ01", 0x803B8108, 0x12A0, 0x4864, 0x4A4C},
+      {"GZLE", CameraSource::ViewClass, 0x803C4C08, 0x12A0, 0x4870, 0x4A58},
+      {"GZLP", CameraSource::ViewClass, 0x803CC530, 0x12A0, 0x4870, 0x4A58},
+      {"GZLJ", CameraSource::ViewClass, 0x803B8108, 0x12A0, 0x4864, 0x4A4C},
+      // Skyward Sword
+      {"SOUE", CameraSource::MatrixPointer, 0x80575BD4},
+      {"SOUJ", CameraSource::MatrixPointer, 0x80578E34},
   };
-
-  const std::string game_id = SConfig::GetInstance().GetGameID();
-  const auto it = std::ranges::find_if(supported_views, [&game_id](const SupportedView& entry) {
-    return game_id == entry.game_id;
-  });
-  if (it == std::end(supported_views))
-  {
-    ReadSkywardSwordCamera(guard, game_id, sample);
-    return;
-  }
 
   static constexpr u32 LOOKAT_OFFSET = 0x0D8;
   static constexpr u32 LOOKAT_EYE_OFFSET = LOOKAT_OFFSET;
   static constexpr u32 LOOKAT_CENTER_OFFSET = LOOKAT_OFFSET + 0x0C;
   static constexpr u32 LOOKAT_UP_OFFSET = LOOKAT_OFFSET + 0x18;
   static constexpr u32 VIEW_MATRIX_OFFSET = 0x140;
+  static constexpr u32 CAMERA_MATRIX_OFFSET = 0xF8;
 
-  const u32 play_address = it->game_info_address + it->play_offset;
-  std::optional<u32> view_address =
-      ReadU32FromMemory(guard, play_address + it->current_view_offset);
-  if (!view_address || *view_address == 0)
-    view_address = ReadU32FromMemory(guard, play_address + it->camera_info_camera_offset);
+  const auto read_camera_from_matrix_pointer = [&](u32 pointer_address) {
+    const std::optional<u32> matrix_owner_address = ReadU32FromMemory(guard, pointer_address);
+    if (!matrix_owner_address || *matrix_owner_address < 0x80000000 ||
+        *matrix_owner_address > 0x90000000)
+    {
+      return false;
+    }
 
-  if (!view_address || *view_address == 0)
+    const std::optional<Common::Matrix44> view_matrix =
+        ReadViewMatrixFromMemoryAddress(guard, *matrix_owner_address + CAMERA_MATRIX_OFFSET);
+    if (!view_matrix || !IsLikelyViewMatrix(*view_matrix))
+      return false;
+
+    const std::optional<Common::Vec3> eye = GetEyeFromViewMatrix(*view_matrix);
+    const std::optional<Common::Vec3> up = GetUpFromViewMatrix(*view_matrix);
+    Common::Vec3 look{view_matrix->data[8], view_matrix->data[9], view_matrix->data[10]};
+    if (!eye || !up || look.Length() < 0.0001f)
+      return false;
+
+    look = look.Normalized();
+    sample->game_view_matrix = view_matrix;
+    sample->camera_eye = eye;
+    sample->camera_center = *eye - look;
+    sample->camera_up = up;
+    return true;
+  };
+
+  const std::string game_id = SConfig::GetInstance().GetGameID();
+  const std::string_view game_id_prefix = std::string_view(game_id).substr(0, 4);
+  const auto game =
+      std::ranges::find(supported_games, game_id_prefix, &SupportedGame::game_id_prefix);
+
+  if (game != std::end(supported_games))
+  {
+    if (game->source == CameraSource::MatrixPointer)
+    {
+      read_camera_from_matrix_pointer(game->root_address);
+      return;
+    }
+
+    // dComIfG titles expose the active view_class* through gameInfo.play.mCurrentView.
+    const u32 play_address = game->root_address + game->play_offset;
+    std::optional<u32> view_address =
+        ReadU32FromMemory(guard, play_address + game->current_view_offset);
+    if (!view_address || *view_address == 0)
+      view_address = ReadU32FromMemory(guard, play_address + game->camera_info_camera_offset);
+
+    if (!view_address || *view_address == 0)
+      return;
+
+    sample->camera_eye = ReadVec3FromMemoryAddress(guard, *view_address + LOOKAT_EYE_OFFSET);
+    sample->camera_center = ReadVec3FromMemoryAddress(guard, *view_address + LOOKAT_CENTER_OFFSET);
+    sample->camera_up = ReadVec3FromMemoryAddress(guard, *view_address + LOOKAT_UP_OFFSET);
+    sample->game_view_matrix =
+        ReadViewMatrixFromMemoryAddress(guard, *view_address + VIEW_MATRIX_OFFSET);
+    return;
+  }
+
+  if (!game_id_prefix.starts_with("SOU"))
     return;
 
-  sample->camera_eye = ReadVec3FromMemoryAddress(guard, *view_address + LOOKAT_EYE_OFFSET);
-  sample->camera_center = ReadVec3FromMemoryAddress(guard, *view_address + LOOKAT_CENTER_OFFSET);
-  sample->camera_up = ReadVec3FromMemoryAddress(guard, *view_address + LOOKAT_UP_OFFSET);
-  sample->game_view_matrix =
-      ReadViewMatrixFromMemoryAddress(guard, *view_address + VIEW_MATRIX_OFFSET);
+  static std::string s_cached_game_id_prefix;
+  static std::optional<u32> s_cached_matrix_pointer_address;
+  if (s_cached_game_id_prefix == game_id_prefix && s_cached_matrix_pointer_address &&
+      read_camera_from_matrix_pointer(*s_cached_matrix_pointer_address))
+  {
+    return;
+  }
+
+  s_cached_game_id_prefix = game_id_prefix;
+  s_cached_matrix_pointer_address.reset();
+
+  // Scan the small data range containing the verified matrix-owner pointers for other regions,
+  // then cache the first valid hit.
+  for (u32 address = 0x80570000; address <= 0x80590000; address += sizeof(u32))
+  {
+    if (read_camera_from_matrix_pointer(address))
+    {
+      s_cached_matrix_pointer_address = address;
+      return;
+    }
+  }
 }
 
 std::optional<u32> ResolveAddressTerm(const Core::CPUThreadGuard& guard, std::string_view text,

@@ -407,6 +407,7 @@ void CPUManager::AddCPUThreadJob(Common::MoveOnlyFunction<void()> function)
 {
   std::unique_lock state_lock(m_state_change_lock);
   m_pending_jobs.push(std::move(function));
+  m_state_cpu_cvar.notify_one();
 }
 
 }  // namespace CPU

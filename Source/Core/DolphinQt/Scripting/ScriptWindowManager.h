@@ -7,9 +7,13 @@
 #include <atomic>
 #include <map>
 #include <memory>
+#include <optional>
 
 #include <QObject>
+#include <QByteArray>
+#include <QRect>
 #include <QTimer>
+#include <QString>
 #include <QWidget>
 
 class QVBoxLayout;
@@ -33,7 +37,11 @@ signals:
   void OverlayClosed();
 
 private:
+  struct ManagedWindow;
   void Sync();
+  bool eventFilter(QObject* watched, QEvent* event) override;
+  void ConfigureGeometryPersistence(ManagedWindow& window, const std::string& path);
+  void SaveGeometry(const ManagedWindow& window) const;
 
   struct ManagedChild
   {
@@ -60,6 +68,12 @@ private:
     bool hardware_visibility_initialized = false;
     u64 canvas_generation = 0;
     bool canvas_generation_set = false;
+    QString geometry_path;
+    QByteArray observed_geometry;
+    QTimer* geometry_save_timer = nullptr;
+    bool applying_saved_geometry = false;
+    std::optional<QRect> requested_geometry;
+    int geometry_restore_cycles = 0;
   };
 
   std::map<API::Gui::WidgetId, ManagedWindow> m_windows;

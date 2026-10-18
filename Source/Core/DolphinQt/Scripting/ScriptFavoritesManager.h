@@ -3,7 +3,6 @@
 
 #pragma once
 
-#include <QHash>
 #include <QObject>
 #include <QString>
 #include <QStringList>
@@ -19,6 +18,8 @@ public:
   bool IsFavorite(const QString& path) const;
   void SetFavorite(const QString& path, bool favorite);
   void ToggleFavorite(const QString& path);
+  void SetFavoritesOrder(const QStringList& paths);
+  void ClearFavorites();
 
   bool IsScriptEnabled(const QString& path) const;
   void SetScriptEnabled(const QString& path, bool enabled);
@@ -35,5 +36,5 @@ private:
   void SaveFavorites() const;
   static QString NormalizePath(const QString& path);
 
-  QHash<QString, bool> m_favorites;
+  QStringList m_favorites;
 };

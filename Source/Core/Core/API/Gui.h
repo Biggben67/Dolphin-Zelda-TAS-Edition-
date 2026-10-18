@@ -67,6 +67,13 @@ public:
     Checkbox,
     InputText,
   };
+  struct WindowGeometry
+  {
+    int x = 0;
+    int y = 0;
+    int width = 0;
+    int height = 0;
+  };
   struct Widget
   {
     WidgetKind kind;
@@ -84,6 +91,10 @@ public:
     std::optional<u32> bg_color;     // ARGB
     std::string style;               // QSS, detached only
     std::string group;               // Detached-window control section
+    std::string geometry_path;       // Detached-window JSON geometry persistence
+    bool geometry_save_requested = false;  // Window only: consumed by the Qt manager
+    std::optional<WindowGeometry> reported_geometry;   // Window only: latest Qt rectangle
+    std::optional<WindowGeometry> requested_geometry;  // Window only: consumed by Qt
     bool canvas = false;             // Window only: freeform QPainter canvas
     bool hardware_canvas = false;    // Window only: native GPU canvas requested by the script
     int canvas_w = 0, canvas_h = 0;  // Window only
@@ -254,6 +265,13 @@ public:
   void SetTextColor(WidgetId id, u32 color);
   void SetBgColor(WidgetId id, u32 color);
   void SetStyle(WidgetId id, const std::string& style);
+  void SetWindowGeometryPath(WidgetId id, const std::string& path);
+  void RequestWindowGeometrySave(WidgetId id);
+  bool TakeWindowGeometrySaveRequest(WidgetId id);  // Qt thread, consumes
+  std::optional<WindowGeometry> GetWindowGeometry(WidgetId id);
+  void RequestWindowGeometry(WidgetId id, const WindowGeometry& geometry);
+  std::optional<WindowGeometry> TakeWindowGeometryRequest(WidgetId id);  // Qt thread, consumes
+  void ReportWindowGeometry(WidgetId id, const WindowGeometry& geometry);  // Qt thread
   void SetClipboardText(std::string text);
   bool TakeClipboardText(std::string& text);  // Qt thread, consumes
   void RemoveWidgetsForOwner(void* owner);
@@ -283,6 +301,7 @@ public:
     std::optional<u32> text_color;
     std::optional<u32> bg_color;
     std::string style;
+    std::string geometry_path;
     bool canvas = false;
     bool hardware_canvas = false;
     int canvas_w = 0, canvas_h = 0;

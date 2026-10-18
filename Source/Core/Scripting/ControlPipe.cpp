@@ -5,6 +5,7 @@
 
 #ifdef _WIN32
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cctype>
@@ -115,6 +116,63 @@ const char* StateToString(Core::State state)
   default:
     return "other";
   }
+}
+
+std::string HexEncode(const u8* data, size_t size)
+{
+  static constexpr char HEX[] = "0123456789abcdef";
+  std::string result;
+  result.resize(size * 2);
+  for (size_t i = 0; i < size; ++i)
+  {
+    result[i * 2] = HEX[data[i] >> 4];
+    result[i * 2 + 1] = HEX[data[i] & 0x0f];
+  }
+  return result;
+}
+
+int HexDigit(char value)
+{
+  if (value >= '0' && value <= '9')
+    return value - '0';
+  if (value >= 'a' && value <= 'f')
+    return value - 'a' + 10;
+  if (value >= 'A' && value <= 'F')
+    return value - 'A' + 10;
+  return -1;
+}
+
+bool HexDecode(std::string_view text, WiimoteEmu::SerializedWiimoteState* state)
+{
+  if ((text.size() & 1) != 0 || text.size() / 2 > state->data.size())
+    return false;
+  state->length = static_cast<u8>(text.size() / 2);
+  for (size_t i = 0; i < state->length; ++i)
+  {
+    const int high = HexDigit(text[i * 2]);
+    const int low = HexDigit(text[i * 2 + 1]);
+    if (high < 0 || low < 0)
+      return false;
+    state->data[i] = static_cast<u8>((high << 4) | low);
+  }
+  return true;
+}
+
+bool HexDecodeGC(std::string_view text, Movie::ControllerState* state)
+{
+  if (text.size() != sizeof(Movie::ControllerState) * 2)
+    return false;
+  std::array<u8, sizeof(Movie::ControllerState)> bytes{};
+  for (size_t i = 0; i < bytes.size(); ++i)
+  {
+    const int high = HexDigit(text[i * 2]);
+    const int low = HexDigit(text[i * 2 + 1]);
+    if (high < 0 || low < 0)
+      return false;
+    bytes[i] = static_cast<u8>((high << 4) | low);
+  }
+  std::memcpy(state, bytes.data(), bytes.size());
+  return true;
 }
 
 bool WriteRaw(HANDLE pipe, const char* buf, int len)
@@ -253,6 +311,30 @@ bool ParseU64Field(const char* buf, const char* key, u64& out)
   return true;
 }
 
+template <size_t N>
+bool ParseOffsetArray(const char* buf, const char* key, std::array<u32, N>& offsets)
+{
+  const char* p = ValueAfter(buf, key);
+  if (!p || *p++ != '[')
+    return false;
+  for (size_t i = 0; i < N; ++i)
+  {
+    while (std::isspace(static_cast<unsigned char>(*p)))
+      ++p;
+    char* end = nullptr;
+    const auto offset = strtoull(p, &end, 0);
+    if (end == p || offset >= 0x10000)
+      return false;
+    offsets[i] = static_cast<u32>(offset);
+    p = end;
+    while (std::isspace(static_cast<unsigned char>(*p)))
+      ++p;
+    if (i + 1 < N && *p++ != ',')
+      return false;
+  }
+  return *p == ']';
+}
+
 // Parse a bool field, accepting JSON true/false or 0/1. Missing key yields def.
 bool ParseBoolField(const char* buf, const char* key, bool def)
 {
@@ -346,6 +428,20 @@ static void ApplyPadOverrideOnCPU(Core::System* system, int port, const PadOverr
       *system, [port, ov]() { ApplyPadOverride(port, ov); }, true);
 }
 
+static u64 StepVIFrame(Core::System* system)
+{
+  auto& movie = system->GetMovie();
+  Core::DoFrameStep(*system);
+  auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  while (std::chrono::steady_clock::now() < deadline)
+  {
+    if (Core::GetState(*system) == Core::State::Paused)
+      break;
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  return movie.GetCurrentFrame();
+}
+
 // Step the requested number of input frames (controller polls), skipping lag VI frames so
 // "frames=N" means N inputs the game actually read, not N display frames.
 static u64 StepInputFrames(Core::System* system, long long n)
@@ -356,18 +452,111 @@ static u64 StepInputFrames(Core::System* system, long long n)
     const u64 polls_before = movie.GetPollCount();
     // Cap the VI steps spent reaching one poll so a non-polling state can't hang the pipe.
     for (int step = 0; step < 64 && movie.GetPollCount() == polls_before; ++step)
-    {
-      Core::DoFrameStep(*system);
-      auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-      while (std::chrono::steady_clock::now() < deadline)
-      {
-        if (Core::GetState(*system) == Core::State::Paused)
-          break;
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-      }
-    }
+      StepVIFrame(system);
   }
   return movie.GetCurrentFrame();
+}
+
+struct FrameMemoryLayout
+{
+  u32 frame_address;
+  u32 actor_pointer_address;
+  u32 position_offset;
+  std::array<u32, 15> state_offsets;
+  u32 nested_pointer_offset;
+  u32 nested_value_offset;
+  std::array<u32, 6> short_offsets;
+};
+
+struct FrameMemorySample
+{
+  u32 game_frame;
+  u64 movie_frame;
+  u64 input_row;
+  std::array<u32, 3> position_bits;
+  std::array<u32, 16> state_bits;
+  std::array<u16, 6> state_shorts;
+};
+
+// A controller poll can span more than one game update. Sample on the CPU-thread frame event.
+static std::optional<std::vector<FrameMemorySample>> CaptureFrameMemory(
+    Core::System* system, const FrameMemoryLayout& layout, u64 target_movie_frame)
+{
+  auto& movie = system->GetMovie();
+  if (target_movie_frame <= movie.GetCurrentFrame() ||
+      target_movie_frame - movie.GetCurrentFrame() > 10000)
+    return std::nullopt;
+
+  std::mutex samples_mutex;
+  std::vector<FrameMemorySample> samples;
+  samples.reserve(256);
+  auto listener = [&](const API::Events::FrameAdvance&) {
+    Core::CPUThreadGuard guard(*system);
+    auto& mmu = system->GetMMU();
+    const auto game_frame = mmu.HostTryRead<u32>(guard, layout.frame_address);
+    const auto actor = mmu.HostTryRead<u32>(guard, layout.actor_pointer_address);
+    if (!game_frame || !actor || actor->value < 0x80000000 || actor->value >= 0x81800000)
+      return;
+
+    std::array<u32, 3> bits{};
+    for (size_t axis = 0; axis < bits.size(); ++axis)
+    {
+      const auto value = mmu.HostTryRead<u32>(
+          guard, actor->value + layout.position_offset + static_cast<u32>(axis) * 4);
+      if (!value)
+        return;
+      bits[axis] = value->value;
+    }
+    std::array<u32, 16> state_bits{};
+    for (size_t index = 0; index < layout.state_offsets.size(); ++index)
+    {
+      const auto value = mmu.HostTryRead<u32>(guard, actor->value + layout.state_offsets[index]);
+      if (!value)
+        return;
+      state_bits[index] = value->value;
+    }
+    const auto nested = mmu.HostTryRead<u32>(guard, actor->value + layout.nested_pointer_offset);
+    if (nested && nested->value >= 0x80000000 && nested->value < 0x81800000)
+    {
+      const auto value = mmu.HostTryRead<u32>(guard, nested->value + layout.nested_value_offset);
+      if (value)
+        state_bits[15] = value->value;
+    }
+    std::array<u16, 6> state_shorts{};
+    for (size_t index = 0; index < layout.short_offsets.size(); ++index)
+    {
+      const auto value = mmu.HostTryRead<u16>(guard, actor->value + layout.short_offsets[index]);
+      if (!value)
+        return;
+      state_shorts[index] = value->value;
+    }
+    const auto meta = movie.GetGCRuntimeFrameMetadata();
+    if (!meta)
+      return;
+    std::lock_guard lock(samples_mutex);
+    if (samples.empty() || samples.back().game_frame != game_frame->value)
+      samples.push_back({game_frame->value, meta->current_frame, meta->current_input_row,
+                         bits, state_bits, state_shorts});
+  };
+  const auto id = API::GetEventHub().ListenEvent<API::Events::FrameAdvance>(listener);
+  bool reached = true;
+  while (movie.GetCurrentFrame() < target_movie_frame)
+  {
+    const u64 before = movie.GetCurrentFrame();
+    const u64 after = StepVIFrame(system);
+    if (after <= before ||
+        (after > target_movie_frame && after - target_movie_frame > 4) ||
+        (!movie.IsPlayingInput() && after < target_movie_frame))
+    {
+      reached = false;
+      break;
+    }
+  }
+  API::GetEventHub().UnlistenEvent(id);
+  if (!reached)
+    return std::nullopt;
+  std::lock_guard lock(samples_mutex);
+  return samples;
 }
 
 struct SeqElement
@@ -642,6 +831,164 @@ void HandleRequest(HANDLE pipe, const char* buf, Core::System* system)
         movie.IsPlayingInput() ? "true" : "false");
     WriteRaw(pipe, resp, len);
   }
+  else if (CommandMatches(buf, command, "dtmmeta"))
+  {
+    auto& movie = system->GetMovie();
+    if (const auto metadata = movie.GetGCRuntimeFrameMetadata())
+    {
+      std::string resp = "{\"ok\":true,\"kind\":\"gc\",\"row_count\":";
+      resp += std::to_string(metadata->row_count);
+      resp += ",\"current_frame\":" + std::to_string(metadata->current_frame);
+      resp += ",\"current_input_row\":" + std::to_string(metadata->current_input_row);
+      resp += ",\"data_generation\":" + std::to_string(metadata->data_generation);
+      resp += ",\"recording\":" + std::string(metadata->is_recording ? "true" : "false");
+      resp += ",\"playing\":" + std::string(metadata->is_playing ? "true" : "false");
+      resp += ",\"read_only\":" + std::string(metadata->is_read_only ? "true" : "false");
+      resp += ",\"active_controllers\":[";
+      for (size_t i = 0; i < metadata->active_controllers.size(); ++i)
+      {
+        if (i != 0)
+          resp += ',';
+        resp += (metadata->active_controllers[i] ? "true" : "false");
+      }
+      resp += "]}\n";
+      WriteString(pipe, resp);
+    }
+    else if (const auto wii_metadata = movie.GetWiiRuntimeFrameMetadata())
+    {
+      std::string resp = "{\"ok\":true,\"kind\":\"wii\",\"row_count\":";
+      resp += std::to_string(wii_metadata->row_count);
+      resp += ",\"current_frame\":" + std::to_string(wii_metadata->current_frame);
+      resp += ",\"current_input_row\":" + std::to_string(wii_metadata->current_input_row);
+      resp += ",\"data_generation\":" + std::to_string(wii_metadata->data_generation);
+      resp += ",\"recording\":" + std::string(wii_metadata->is_recording ? "true" : "false");
+      resp += ",\"playing\":" + std::string(wii_metadata->is_playing ? "true" : "false");
+      resp += ",\"read_only\":" + std::string(wii_metadata->is_read_only ? "true" : "false");
+      resp += ",\"active_wiimotes\":[";
+      for (size_t i = 0; i < wii_metadata->active_wiimotes.size(); ++i)
+      {
+        if (i != 0)
+          resp += ',';
+        resp += (wii_metadata->active_wiimotes[i] ? "true" : "false");
+      }
+      resp += "]}\n";
+      WriteString(pipe, resp);
+    }
+    else
+    {
+      WriteResponse(pipe, false, StateToString(state));
+    }
+  }
+  else if (CommandMatches(buf, command, "dtmgcread"))
+  {
+    u64 start = 0;
+    const long long controller = ParseIntField(buf, "\"controller\"");
+    const long long requested = ParseIntField(buf, "\"count\"");
+    auto& movie = system->GetMovie();
+    const auto metadata = movie.GetGCRuntimeFrameMetadata();
+    if (!ParseU64Field(buf, "\"start\"", start) || controller < 0 || controller >= 4 ||
+        !metadata || !metadata->active_controllers[static_cast<size_t>(controller)] ||
+        start >= metadata->row_count)
+    {
+      WriteResponse(pipe, false, StateToString(state));
+    }
+    else
+    {
+      const u64 count = static_cast<u64>(std::clamp<long long>(requested, 1, 512));
+      const u64 end = start + std::min(count, metadata->row_count - start);
+      std::string resp = "{\"ok\":true,\"kind\":\"gc\",\"start\":" +
+                         std::to_string(start) + ",\"controller\":" +
+                         std::to_string(controller) + ",\"rows\":[";
+      bool first = true;
+      for (u64 row = start; row < end; ++row)
+      {
+        const auto value = movie.GetGCRuntimeFrameRow(row);
+        if (!value)
+          continue;
+        if (!first)
+          resp += ',';
+        first = false;
+        const auto& pad = value->at(static_cast<size_t>(controller));
+        resp += "{\"row\":" + std::to_string(row) + ",\"serialized\":\"";
+        resp += HexEncode(reinterpret_cast<const u8*>(&pad), sizeof(pad));
+        resp += "\"}";
+      }
+      resp += "]}\n";
+      WriteString(pipe, resp);
+    }
+  }
+  else if (CommandMatches(buf, command, "dtmgcwrite"))
+  {
+    u64 row = 0;
+    const long long controller = ParseIntField(buf, "\"controller\"");
+    char hex[64] = {};
+    Movie::ControllerState pad{};
+    auto& movie = system->GetMovie();
+    const auto metadata = movie.GetGCRuntimeFrameMetadata();
+    const bool ok = state == Core::State::Paused && metadata && metadata->is_playing &&
+                    ParseU64Field(buf, "\"row\"", row) && row < metadata->row_count &&
+                    row > metadata->current_input_row && controller >= 0 && controller < 4 &&
+                    metadata->active_controllers[static_cast<size_t>(controller)] &&
+                    ParseStringField(buf, "\"serialized\"", hex, sizeof(hex)) &&
+                    HexDecodeGC(hex, &pad) &&
+                    movie.SetGCRuntimeFrameState(row, static_cast<int>(controller), pad);
+    WriteResponse(pipe, ok, StateToString(state));
+  }
+  else if (CommandMatches(buf, command, "dtmwiiread"))
+  {
+    u64 start = 0;
+    ParseU64Field(buf, "\"start\"", start);
+    long long requested = ParseIntField(buf, "\"count\"");
+    const u64 count = static_cast<u64>(std::clamp<long long>(requested, 1, 10000));
+    auto& movie = system->GetMovie();
+    const auto metadata = movie.GetWiiRuntimeFrameMetadata();
+    if (!metadata || start >= metadata->row_count)
+    {
+      WriteResponse(pipe, false, StateToString(state));
+    }
+    else
+    {
+      const u64 end = std::min(metadata->row_count, start + count);
+      std::string resp = "{\"ok\":true,\"start\":" + std::to_string(start) + ",\"rows\":[";
+      bool first = true;
+      for (u64 row = start; row < end; ++row)
+      {
+        const auto value = movie.GetWiiRuntimeFrameRow(row);
+        if (!value)
+          continue;
+        if (!first)
+          resp += ',';
+        first = false;
+        resp += "{\"row\":" + std::to_string(row);
+        resp += ",\"wiimote\":" + std::to_string(value->wiimote);
+        resp += ",\"reset\":" + std::string(value->is_reset ? "true" : "false");
+        resp += ",\"serialized\":\"";
+        if (!value->is_reset)
+          resp += HexEncode(value->serialized_state.data.data(), value->serialized_state.length);
+        resp += "\"}";
+      }
+      resp += "]}\n";
+      WriteString(pipe, resp);
+    }
+  }
+  else if (CommandMatches(buf, command, "dtmwiiwrite"))
+  {
+    u64 row = 0;
+    char hex[128] = {};
+    WiimoteEmu::SerializedWiimoteState serialized{};
+    const bool ok = ParseU64Field(buf, "\"row\"", row) &&
+                    ParseStringField(buf, "\"serialized\"", hex, sizeof(hex)) &&
+                    HexDecode(hex, &serialized) &&
+                    system->GetMovie().SetWiiRuntimeFrameState(row, serialized);
+    WriteResponse(pipe, ok, StateToString(state));
+  }
+  else if (CommandMatches(buf, command, "dtmsaveslot"))
+  {
+    const long long slot = ParseIntField(buf, "\"slot\"");
+    const bool ok = slot >= 0 && slot <= 99 &&
+                    State::SaveMovieToSlot(*system, static_cast<int>(slot));
+    WriteResponse(pipe, ok, StateToString(state));
+  }
   else if (CommandMatches(buf, command, "pause"))
   {
     Core::SetState(*system, Core::State::Paused);
@@ -674,6 +1021,74 @@ void HandleRequest(HANDLE pipe, const char* buf, Core::System* system)
 
     u64 landed = StepInputFrames(system, n);
     WriteResponseWithFrame(pipe, true, "paused", landed);
+  }
+  else if (CommandMatches(buf, command, "advancevi"))
+  {
+    if (state != Core::State::Paused)
+      WriteResponse(pipe, false, StateToString(state));
+    else
+      WriteResponseWithFrame(pipe, true, "paused", StepVIFrame(system));
+  }
+  else if (CommandMatches(buf, command, "advanceframetrace"))
+  {
+    u64 target = 0;
+    u64 frame_address = 0;
+    u64 actor_pointer_address = 0;
+    u64 position_offset = 0;
+    u64 nested_pointer_offset = 0;
+    u64 nested_value_offset = 0;
+    FrameMemoryLayout layout{};
+    const bool valid_layout =
+        ParseU64Field(buf, "\"frame_address\"", frame_address) &&
+        ParseU64Field(buf, "\"actor_pointer_address\"", actor_pointer_address) &&
+        ParseU64Field(buf, "\"position_offset\"", position_offset) &&
+        ParseOffsetArray(buf, "\"state_offsets\"", layout.state_offsets) &&
+        ParseU64Field(buf, "\"nested_pointer_offset\"", nested_pointer_offset) &&
+        ParseU64Field(buf, "\"nested_value_offset\"", nested_value_offset) &&
+        ParseOffsetArray(buf, "\"short_offsets\"", layout.short_offsets) &&
+        frame_address >= 0x80000000 && frame_address <= 0xFFFFFFFF &&
+        actor_pointer_address >= 0x80000000 && actor_pointer_address <= 0xFFFFFFFF &&
+        position_offset < 0x10000 && nested_pointer_offset < 0x10000 &&
+        nested_value_offset < 0x10000;
+    if (state != Core::State::Paused || !valid_layout ||
+        !ParseU64Field(buf, "\"target_frame\"", target) || !system->GetMovie().IsPlayingInput())
+    {
+      WriteResponse(pipe, false, StateToString(state));
+    }
+    else
+    {
+      layout.frame_address = static_cast<u32>(frame_address);
+      layout.actor_pointer_address = static_cast<u32>(actor_pointer_address);
+      layout.position_offset = static_cast<u32>(position_offset);
+      layout.nested_pointer_offset = static_cast<u32>(nested_pointer_offset);
+      layout.nested_value_offset = static_cast<u32>(nested_value_offset);
+      const auto samples = CaptureFrameMemory(system, layout, target);
+      if (!samples)
+      {
+        WriteResponse(pipe, false, StateToString(state));
+      }
+      else
+      {
+        std::string resp = "{\"ok\":true,\"frame\":" +
+                           std::to_string(system->GetMovie().GetCurrentFrame()) + ",\"samples\":[";
+        for (const auto& sample : *samples)
+        {
+          if (resp.back() != '[')
+            resp += ',';
+          resp += '[' + std::to_string(sample.game_frame) + ',' +
+                  std::to_string(sample.movie_frame) + ',' + std::to_string(sample.input_row);
+          for (u32 bits : sample.position_bits)
+            resp += ',' + std::to_string(bits);
+          for (u32 bits : sample.state_bits)
+            resp += ',' + std::to_string(bits);
+          for (u16 value : sample.state_shorts)
+            resp += ',' + std::to_string(value);
+          resp += ']';
+        }
+        resp += "]}\n";
+        WriteString(pipe, resp);
+      }
+    }
   }
   else if (CommandMatches(buf, command, "advanceseq"))
   {

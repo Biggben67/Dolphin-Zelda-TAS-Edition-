@@ -21,6 +21,7 @@
 #include <QMimeData>
 #include <QScreen>
 #include <QSet>
+#include <QSettings>
 #include <QStackedWidget>
 #include <QStyleHints>
 #include <QTextStream>
@@ -271,44 +272,57 @@ enum class AutoWindowPresetMode
   Disabled
 };
 
-static AutoWindowPresetMode ReadAutoWindowPresetMode()
+constexpr auto AUTO_WINDOW_PRESET_MODE_KEY = "tas/windowPresets/autoMode";
+constexpr auto AUTO_WINDOW_PRESET_NAME_KEY = "tas/windowPresets/autoName";
+
+static void EnsureAutoWindowPresetSettingsMigrated()
 {
+  QSettings& settings = Settings::GetQSettings();
+  if (settings.contains(AUTO_WINDOW_PRESET_MODE_KEY))
+    return;
+
   Common::IniFile ini;
   ini.Load(File::GetUserPath(D_CONFIG_IDX) + "Dolphin.ini");
   auto* section = ini.GetOrCreateSection("TAS");
   std::string mode;
+  std::string name;
   section->Get("AutoWindowPresetMode", &mode, "game");
-  if (mode == "fixed")
+  section->Get("AutoWindowPresetName", &name, "");
+  settings.setValue(AUTO_WINDOW_PRESET_MODE_KEY, QString::fromStdString(mode));
+  settings.setValue(AUTO_WINDOW_PRESET_NAME_KEY, QString::fromStdString(name));
+  settings.sync();
+}
+
+static AutoWindowPresetMode ReadAutoWindowPresetMode()
+{
+  EnsureAutoWindowPresetSettingsMigrated();
+  const QString mode =
+      Settings::GetQSettings().value(AUTO_WINDOW_PRESET_MODE_KEY, QStringLiteral("game")).toString();
+  if (mode == QStringLiteral("fixed"))
     return AutoWindowPresetMode::Fixed;
-  if (mode == "disabled")
+  if (mode == QStringLiteral("disabled"))
     return AutoWindowPresetMode::Disabled;
   return AutoWindowPresetMode::GameName;
 }
 
 static QString ReadAutoWindowPresetName()
 {
-  Common::IniFile ini;
-  ini.Load(File::GetUserPath(D_CONFIG_IDX) + "Dolphin.ini");
-  auto* section = ini.GetOrCreateSection("TAS");
-  std::string name;
-  section->Get("AutoWindowPresetName", &name, "");
-  return QString::fromStdString(name);
+  EnsureAutoWindowPresetSettingsMigrated();
+  return Settings::GetQSettings().value(AUTO_WINDOW_PRESET_NAME_KEY).toString();
 }
 
 static void WriteAutoWindowPreset(AutoWindowPresetMode mode, const QString& name)
 {
-  Common::IniFile ini;
-  const std::string path = File::GetUserPath(D_CONFIG_IDX) + "Dolphin.ini";
-  ini.Load(path);
-  auto* section = ini.GetOrCreateSection("TAS");
-  std::string mode_value = "game";
+  QString mode_value = QStringLiteral("game");
   if (mode == AutoWindowPresetMode::Fixed)
-    mode_value = "fixed";
+    mode_value = QStringLiteral("fixed");
   else if (mode == AutoWindowPresetMode::Disabled)
-    mode_value = "disabled";
-  section->Set("AutoWindowPresetMode", mode_value);
-  section->Set("AutoWindowPresetName", name.toStdString());
-  ini.Save(path);
+    mode_value = QStringLiteral("disabled");
+
+  QSettings& settings = Settings::GetQSettings();
+  settings.setValue(AUTO_WINDOW_PRESET_MODE_KEY, mode_value);
+  settings.setValue(AUTO_WINDOW_PRESET_NAME_KEY, name);
+  settings.sync();
 }
 
 static QList<WindowPresetEntry> ReadWindowPresetEntries(const QString& path)

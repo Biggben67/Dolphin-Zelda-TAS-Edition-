@@ -45,7 +45,7 @@ FrameDumper::~FrameDumper()
 void FrameDumper::DumpCurrentFrame(const AbstractTexture* src_texture,
                                    const MathUtil::Rectangle<int>& src_rect,
                                    const MathUtil::Rectangle<int>& target_rect, u64 ticks,
-                                   int frame_number)
+                                   int frame_number, int refresh_rate_divisor)
 {
   int source_width = src_rect.GetWidth();
   int source_height = src_rect.GetHeight();
@@ -70,7 +70,8 @@ void FrameDumper::DumpCurrentFrame(const AbstractTexture* src_texture,
 
   m_frame_dump_readback_texture->CopyFromTexture(src_texture, copy_rect, 0, 0,
                                                  m_frame_dump_readback_texture->GetRect());
-  m_last_frame_state = m_ffmpeg_dump.FetchState(ticks, frame_number);
+  m_last_frame_state =
+      m_ffmpeg_dump.FetchState(ticks, frame_number, refresh_rate_divisor);
   m_frame_dump_needs_flush = true;
 }
 
@@ -337,7 +338,7 @@ bool FrameDumper::StartFrameDumpToFFMPEG(const FrameData& frame)
   // TODO: Perhaps we should care about this when starting dumping in the middle of emulation too,
   // but it's less important there since the first frame to dump usually gets delivered quickly.
   const u64 start_ticks = frame.state.frame_number == 0 ? 0 : frame.state.ticks;
-  return m_ffmpeg_dump.Start(frame.width, frame.height, start_ticks);
+  return m_ffmpeg_dump.Start(frame.width, frame.height, start_ticks, frame.state);
 }
 
 void FrameDumper::DumpFrameToFFMPEG(const FrameData& frame)

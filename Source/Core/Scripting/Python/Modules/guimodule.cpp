@@ -315,6 +315,36 @@ static void widget_set_style(PyObject* self, u64 id, const char* qss)
   state->gui->SetStyle(id, std::string(qss));
 }
 
+static void widget_set_geometry_path(PyObject* self, u64 id, const char* path)
+{
+  GuiModuleState* state = Py::GetState<GuiModuleState>(self);
+  state->gui->SetWindowGeometryPath(id, std::string(path));
+}
+
+static void widget_save_geometry(PyObject* self, u64 id)
+{
+  GuiModuleState* state = Py::GetState<GuiModuleState>(self);
+  state->gui->RequestWindowGeometrySave(id);
+}
+
+static PyObject* widget_get_geometry(PyObject* self, PyObject* args)
+{
+  u64 id;
+  if (!PyArg_ParseTuple(args, "K", &id))
+    return nullptr;
+  GuiModuleState* state = Py::GetState<GuiModuleState>(self);
+  const auto geometry = state->gui->GetWindowGeometry(id);
+  if (!geometry)
+    Py_RETURN_NONE;
+  return Py_BuildValue("(iiii)", geometry->x, geometry->y, geometry->width, geometry->height);
+}
+
+static void widget_set_geometry(PyObject* self, u64 id, int x, int y, int width, int height)
+{
+  GuiModuleState* state = Py::GetState<GuiModuleState>(self);
+  state->gui->RequestWindowGeometry(id, {x, y, width, height});
+}
+
 static u64 canvas_window(PyObject* self, const char* title, int width, int height, int embedded,
                          int overlay)
 {
@@ -833,6 +863,20 @@ class _BaseWindow:
     def enable_hardware_canvas(self):
         # Request the native hardware canvas. CPU canvas windows remain the default.
         _widget_enable_hardware_canvas(self._id)
+    def remember_geometry(self, json_path):
+        """Load this detached window's geometry and keep it saved as JSON."""
+        _widget_set_geometry_path(self._id, str(json_path))
+        return self
+    def save_geometry(self):
+        """Request an immediate geometry save for this detached window."""
+        _widget_save_geometry(self._id)
+    @property
+    def geometry(self):
+        """Return the detached window's exact Qt (x, y, width, height) rectangle."""
+        return _widget_get_geometry(self._id)
+    def set_geometry(self, x, y, width, height):
+        """Set the detached window's exact Qt rectangle after layout settles."""
+        _widget_set_geometry(self._id, int(x), int(y), int(width), int(height))
     def _child(self, wid, style, text_color, bg_color, group=None):
         if text_color is not None:
             _widget_set_text_color(wid, text_color)
@@ -903,7 +947,7 @@ class HardwareHud:
     def commit(self):
         _canvas_hardware_hud(self._id, tuple(self._commands))
 
-class Canvas:
+class Canvas(_BaseWindow):
     def __init__(self, id, width, height):
         self._id = id
     @property
@@ -995,8 +1039,11 @@ class Canvas:
         # Accumulated wheel notches since the last call (positive = scroll up). Consumes it.
         return _canvas_take_wheel(self._id)
 
-def canvas(title, width, height, *, embedded=False, overlay=False):
-    return Canvas(_canvas_window(title, width, height, int(embedded), int(overlay)), width, height)
+def canvas(title, width, height, *, embedded=False, overlay=False, geometry_path=None):
+    result = Canvas(_canvas_window(title, width, height, int(embedded), int(overlay)), width, height)
+    if geometry_path is not None:
+        result.remember_geometry(geometry_path)
+    return result
 
 def overlay(title, *, bg_color=None, text_color=None):
     w = Overlay(_widget_window(title, 1))
@@ -1006,7 +1053,7 @@ def overlay(title, *, bg_color=None, text_color=None):
         _widget_set_text_color(w._id, text_color)
     return w
 
-def window(title, *, style=None, bg_color=None, text_color=None):
+def window(title, *, style=None, bg_color=None, text_color=None, geometry_path=None):
     w = Window(_widget_window(title, 0))
     if bg_color is not None:
         _widget_set_bg_color(w._id, bg_color)
@@ -1014,6 +1061,8 @@ def window(title, *, style=None, bg_color=None, text_color=None):
         _widget_set_text_color(w._id, text_color)
     if style is not None:
         _widget_set_style(w._id, style)
+    if geometry_path is not None:
+        w.remember_geometry(geometry_path)
     return w
 )";
   Py::Object result = Py::LoadPyCodeIntoModule(module, pycode);
@@ -1066,6 +1115,10 @@ PyMODINIT_FUNC PyInit_gui()
       {"_widget_set_text_color", Py::as_py_func<widget_set_text_color>, METH_VARARGS, ""},
       {"_widget_set_bg_color", Py::as_py_func<widget_set_bg_color>, METH_VARARGS, ""},
       {"_widget_set_style", Py::as_py_func<widget_set_style>, METH_VARARGS, ""},
+      {"_widget_set_geometry_path", Py::as_py_func<widget_set_geometry_path>, METH_VARARGS, ""},
+      {"_widget_save_geometry", Py::as_py_func<widget_save_geometry>, METH_VARARGS, ""},
+      {"_widget_get_geometry", widget_get_geometry, METH_VARARGS, ""},
+      {"_widget_set_geometry", Py::as_py_func<widget_set_geometry>, METH_VARARGS, ""},
       {"_canvas_window", Py::as_py_func<canvas_window>, METH_VARARGS, ""},
       {"_canvas_clear", Py::as_py_func<canvas_clear>, METH_VARARGS, ""},
       {"_canvas_commit", Py::as_py_func<canvas_commit>, METH_VARARGS, ""},

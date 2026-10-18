@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 #include "Common/BitUtils.h"
 #include "Core/Config/MainSettings.h"
@@ -128,6 +129,34 @@ void WriteIRDataForPoints(WiimoteCommon::DataReportBuilder& rpt,
     break;
   }
 }
+
+void ApplyWiiButtonsOverride(const API::WiiInputButtonsOverride& input_override,
+                             WiimoteCommon::ButtonData* buttons)
+{
+  buttons->hex = (buttons->hex & ~input_override.mask.hex) |
+                 (input_override.button_data.hex & input_override.mask.hex);
+}
+
+void ApplyNunchuckButtonsOverride(const API::NunchuckButtonsOverride& input_override,
+                                  WiimoteEmu::Nunchuk::DataFormat* nunchuk)
+{
+  u8 buttons = nunchuk->GetButtons();
+  const u8 override_buttons = input_override.button_data.GetButtons();
+  const auto apply_button = [&](u8 button, bool enabled) {
+    if (!enabled)
+      return;
+    buttons = (buttons & ~button) | (override_buttons & button);
+  };
+  apply_button(WiimoteEmu::Nunchuk::BUTTON_C, input_override.override_c);
+  apply_button(WiimoteEmu::Nunchuk::BUTTON_Z, input_override.override_z);
+  nunchuk->SetButtons(buttons);
+
+  const auto override_stick = input_override.button_data.GetStick().value;
+  if (input_override.override_stick_x)
+    nunchuk->jx = override_stick.x;
+  if (input_override.override_stick_y)
+    nunchuk->jy = override_stick.y;
+}
 }  // namespace
 
 namespace API
@@ -187,31 +216,46 @@ void GCManip::PerformInputManip(GCPadStatus* pad_status, int controller_id)
 
 WiimoteCommon::ButtonData WiiButtonsManip::Get(int controller_id)
 {
-  auto iter = m_overrides.find(controller_id);
-  if (iter != m_overrides.end())
-    return iter->second.button_data;
+  WiimoteCommon::ButtonData buttons = GetRaw(controller_id);
+  ApplyOverride(controller_id, &buttons);
+  return buttons;
+}
 
+WiimoteCommon::ButtonData WiiButtonsManip::GetRaw(int controller_id) const
+{
   if (auto* const wiimote = GetEmulatedWiimote(controller_id))
     return wiimote->GetCurrentlyPressedButtons();
 
   return {};
 }
 
-bool WiiButtonsManip::TryGetOverride(int controller_id, WiimoteCommon::ButtonData* button_data) const
+bool WiiButtonsManip::ApplyOverride(int controller_id, WiimoteCommon::ButtonData* button_data)
 {
   if (IsMovieInputPlaybackActive())
+  {
+    m_overrides.erase(controller_id);
     return false;
+  }
 
-  const auto iter = m_overrides.find(controller_id);
+  auto iter = m_overrides.find(controller_id);
   if (iter == m_overrides.end())
     return false;
 
-  *button_data = iter->second.button_data;
+  ApplyWiiButtonsOverride(iter->second, button_data);
+  iter->second.used = true;
   return true;
 }
 
 void WiiButtonsManip::Set(WiimoteCommon::ButtonData button_data, int controller_id,
                           ClearOn clear_on)
+{
+  WiimoteCommon::ButtonData mask{};
+  mask.hex = std::numeric_limits<decltype(mask.hex)>::max();
+  Set(button_data, mask, controller_id, clear_on);
+}
+
+void WiiButtonsManip::Set(WiimoteCommon::ButtonData button_data,
+                          WiimoteCommon::ButtonData mask, int controller_id, ClearOn clear_on)
 {
   if (IsMovieInputPlaybackActive())
   {
@@ -219,7 +263,7 @@ void WiiButtonsManip::Set(WiimoteCommon::ButtonData button_data, int controller_
     return;
   }
 
-  m_overrides[controller_id] = {button_data, clear_on, /* used: */ false};
+  m_overrides[controller_id] = {button_data, mask, clear_on, /* used: */ false};
 }
 
 void WiiButtonsManip::PerformInputManip(WiimoteCommon::DataReportBuilder& rpt, int controller_id)
@@ -243,7 +287,10 @@ void WiiButtonsManip::PerformInputManip(WiimoteCommon::DataReportBuilder& rpt, i
 
   WiimoteCommon::DataReportBuilder::CoreData core;
   rpt.GetCoreData(&core);
-  core.hex = input_override.button_data.hex;
+  WiimoteCommon::ButtonData buttons{};
+  buttons.hex = core.hex;
+  ApplyWiiButtonsOverride(input_override, &buttons);
+  core.hex = buttons.hex;
   rpt.SetCoreData(core);
   if (input_override.clear_on == ClearOn::NextPoll)
   {
@@ -383,10 +430,10 @@ void WiiMotionPlusManip::Set(WiimoteEmu::MotionPlus::DataFormat::Data motion_plu
 
 WiimoteEmu::Nunchuk::DataFormat NunchuckButtonsManip::Get(int controller_id)
 {
-  auto iter = m_overrides.find(controller_id);
-  if (iter != m_overrides.end())
-    return iter->second.button_data;
-  return m_nunchuk_state[controller_id];
+  const auto iter = m_nunchuk_state.find(controller_id);
+  auto nunchuk = iter != m_nunchuk_state.end() ? iter->second : GetRaw(controller_id);
+  ApplyOverride(controller_id, &nunchuk);
+  return nunchuk;
 }
 
 WiimoteEmu::Nunchuk::DataFormat NunchuckButtonsManip::GetRaw(int controller_id) const
@@ -402,22 +449,33 @@ void NunchuckButtonsManip::SetRaw(int controller_id, WiimoteEmu::Nunchuk::DataFo
   m_raw_nunchuk_state[controller_id] = button_data;
 }
 
-bool NunchuckButtonsManip::TryGetOverride(int controller_id,
-                                          WiimoteEmu::Nunchuk::DataFormat* button_data) const
+bool NunchuckButtonsManip::ApplyOverride(int controller_id,
+                                         WiimoteEmu::Nunchuk::DataFormat* button_data)
 {
   if (IsMovieInputPlaybackActive())
+  {
+    m_overrides.erase(controller_id);
     return false;
+  }
 
-  const auto iter = m_overrides.find(controller_id);
+  auto iter = m_overrides.find(controller_id);
   if (iter == m_overrides.end())
     return false;
 
-  *button_data = iter->second.button_data;
+  ApplyNunchuckButtonsOverride(iter->second, button_data);
+  iter->second.used = true;
   return true;
 }
 
 void NunchuckButtonsManip::Set(WiimoteEmu::Nunchuk::DataFormat button_data, int controller_id,
                                ClearOn clear_on)
+{
+  Set(button_data, true, true, true, true, controller_id, clear_on);
+}
+
+void NunchuckButtonsManip::Set(WiimoteEmu::Nunchuk::DataFormat button_data, bool override_c,
+                               bool override_z, bool override_stick_x, bool override_stick_y,
+                               int controller_id, ClearOn clear_on)
 {
   if (IsMovieInputPlaybackActive())
   {
@@ -425,7 +483,8 @@ void NunchuckButtonsManip::Set(WiimoteEmu::Nunchuk::DataFormat button_data, int 
     return;
   }
 
-  m_overrides[controller_id] = {button_data, clear_on, /* used: */ false};
+  m_overrides[controller_id] = {button_data, override_c, override_z, override_stick_x,
+                                override_stick_y, clear_on, /* used: */ false};
 }
 
 void NunchuckButtonsManip::PerformInputManip(WiimoteCommon::DataReportBuilder& rpt,
@@ -450,7 +509,7 @@ void NunchuckButtonsManip::PerformInputManip(WiimoteCommon::DataReportBuilder& r
 
   auto nunchuk = reinterpret_cast<WiimoteEmu::Nunchuk::DataFormat*>(rpt.GetExtDataPtr());
   key.Decrypt((u8*)nunchuk, 0, sizeof(*nunchuk));
-  *nunchuk = input_overrides.button_data;
+  ApplyNunchuckButtonsOverride(input_overrides, nunchuk);
   key.Encrypt((u8*)nunchuk, 0, sizeof(*nunchuk));
   if (input_overrides.clear_on == ClearOn::NextPoll)
   {
@@ -588,9 +647,7 @@ void ApplyManipToDesiredWiimoteState(int controller_id, WiimoteEmu::DesiredWiimo
         controller_id, std::get<WiimoteEmu::Nunchuk::DataFormat>(state->extension.data));
   }
 
-  WiimoteCommon::ButtonData button_override;
-  if (GetWiiButtonsManip().TryGetOverride(controller_id, &button_override))
-    state->buttons = button_override;
+  GetWiiButtonsManip().ApplyOverride(controller_id, &state->buttons);
 
   WiimoteCommon::AccelData accel_override;
   if (GetWiiAccelManip().TryGetOverride(controller_id, &accel_override))
@@ -600,15 +657,11 @@ void ApplyManipToDesiredWiimoteState(int controller_id, WiimoteEmu::DesiredWiimo
   if (GetWiiMotionPlusManip().TryGetOverride(controller_id, &motion_plus_override))
     state->motion_plus = motion_plus_override;
 
-  WiimoteEmu::Nunchuk::DataFormat nunchuk_override;
-  if (GetNunchuckButtonsManip().TryGetOverride(controller_id, &nunchuk_override))
+  if (std::holds_alternative<WiimoteEmu::Nunchuk::DataFormat>(state->extension.data))
   {
-    if (std::holds_alternative<WiimoteEmu::Nunchuk::DataFormat>(state->extension.data))
-    {
-      const auto current_nunchuk = std::get<WiimoteEmu::Nunchuk::DataFormat>(state->extension.data);
-      nunchuk_override.SetAccel(current_nunchuk.GetAccel().value);
-    }
-    state->extension.data = nunchuk_override;
+    auto nunchuk = std::get<WiimoteEmu::Nunchuk::DataFormat>(state->extension.data);
+    GetNunchuckButtonsManip().ApplyOverride(controller_id, &nunchuk);
+    state->extension.data = nunchuk;
   }
 
   WiimoteCommon::AccelData nunchuk_accel_override;

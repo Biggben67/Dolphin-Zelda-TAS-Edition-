@@ -99,8 +99,9 @@ public:
   bool PauseAndLock();
   void RestoreStateAndUnlock(bool unpause_on_unlock);
 
-  // Adds a job to be executed during on the CPU thread. This should be combined with
-  // PauseAndLock(), as while the CPU is in the run loop, it won't execute the function.
+  // Adds a job to be executed on the CPU thread. If the CPU is stepping, it is woken so the job
+  // can run without another thread having to pause and lock it first. A job queued while the CPU
+  // is running executes when the run loop next returns.
   void AddCPUThreadJob(Common::MoveOnlyFunction<void()> function);
 
 private:

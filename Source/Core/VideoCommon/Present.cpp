@@ -170,6 +170,31 @@ void Presenter::ViSwap(u32 xfb_addr, u32 fb_width, u32 fb_stride, u32 fb_height,
 {
   bool is_duplicate = FetchXFB(xfb_addr, fb_width, fb_stride, fb_height, ticks);
 
+  m_presents_since_unique_frame =
+      std::min<u8>(static_cast<u8>(m_presents_since_unique_frame + 1), 4);
+  if (!is_duplicate)
+  {
+    m_frame_cadence_samples[m_frame_cadence_sample_index] = m_presents_since_unique_frame;
+    m_frame_cadence_sample_index =
+        (m_frame_cadence_sample_index + 1) % m_frame_cadence_samples.size();
+    m_frame_cadence_sample_count =
+        std::min<u8>(static_cast<u8>(m_frame_cadence_sample_count + 1),
+                     static_cast<u8>(m_frame_cadence_samples.size()));
+    m_presents_since_unique_frame = 0;
+
+    std::array<u8, 5> cadence_counts{};
+    for (u8 i = 0; i < m_frame_cadence_sample_count; ++i)
+      ++cadence_counts[m_frame_cadence_samples[i]];
+
+    u8 best_divisor = m_frame_dump_refresh_rate_divisor;
+    for (u8 divisor = 1; divisor < cadence_counts.size(); ++divisor)
+    {
+      if (cadence_counts[divisor] > cadence_counts[best_divisor])
+        best_divisor = divisor;
+    }
+    m_frame_dump_refresh_rate_divisor = best_divisor;
+  }
+
   PresentInfo present_info{
       .present_count = m_present_count++,
       .emulated_timestamp = ticks,
@@ -316,7 +341,7 @@ void Presenter::ProcessFrameDumping(u64 ticks) const
     // TODO: any scaling done by this won't be gamma corrected,
     // we should either apply post processing as well, or port its gamma correction code
     g_frame_dumper->DumpCurrentFrame(m_xfb_entry->texture.get(), m_xfb_rect, target_rect, ticks,
-                                     m_frame_count);
+                                     m_frame_count, m_frame_dump_refresh_rate_divisor);
   }
 }
 

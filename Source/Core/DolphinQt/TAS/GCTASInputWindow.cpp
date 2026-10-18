@@ -26,6 +26,7 @@
 
 #include "DolphinQt/Scripting/ScriptFavoritesWidget.h"
 #include "DolphinQt/TAS/StickWidget.h"
+#include "DolphinQt/TAS/TASSettingsStore.h"
 #include "DolphinQt/TAS/TASCheckBox.h"
 #include "DolphinQt/TAS/TASSpinBox.h"
 
@@ -153,6 +154,8 @@ GCTASInputWindow::GCTASInputWindow(QWidget* parent, int controller_id)
   m_buttons_box->setLayout(buttons_content_layout);
 
   auto* favorites_widget = new ScriptFavoritesWidget(this);
+  connect(this, &TASInputWindow::RearrangeModeChanged, favorites_widget,
+          &ScriptFavoritesWidget::SetRearrangeEnabled);
   favorites_widget->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Preferred);
   favorites_widget->setFixedHeight(m_buttons_box->sizeHint().height());
 
@@ -221,17 +224,9 @@ void GCTASInputWindow::ApplyEssPreset(int preset_index)
   if (preset_index < 0 || preset_index >= static_cast<int>(k_default_main_ess.size()))
     return;
 
-  int x = k_default_main_ess[preset_index].x;
-  int y = k_default_main_ess[preset_index].y;
-
-  Common::IniFile ini;
-  const std::string ini_path = File::GetUserPath(D_CONFIG_IDX) + "Dolphin.ini";
-  ini.Load(ini_path);
-  ini.GetIfExists("TAS", "MainStickEss" + std::to_string(preset_index) + "X", &x);
-  ini.GetIfExists("TAS", "MainStickEss" + std::to_string(preset_index) + "Y", &y);
-
-  x = std::clamp(x, 0, 255);
-  y = std::clamp(y, 0, 255);
+  const auto [x, y] = TASSettingsStore::ReadEssPreset(
+      "MainStickEss", preset_index, k_default_main_ess[preset_index].x,
+      k_default_main_ess[preset_index].y);
 
   m_main_stick_x_value->setValue(x);
   m_main_stick_y_value->setValue(y);

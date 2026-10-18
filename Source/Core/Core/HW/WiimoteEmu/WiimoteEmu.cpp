@@ -728,19 +728,13 @@ void Wiimote::Update(const WiimoteEmu::DesiredWiimoteState& target_state)
                                           std::get<Nunchuk::DataFormat>(target_state.extension.data));
   }
 
-  WiimoteCommon::ButtonData button_override;
-  if (API::GetWiiButtonsManip().TryGetOverride(m_index, &button_override))
-    manipulated_state.buttons = button_override;
+  API::GetWiiButtonsManip().ApplyOverride(m_index, &manipulated_state.buttons);
 
-  Nunchuk::DataFormat nunchuk_override;
-  if (API::GetNunchuckButtonsManip().TryGetOverride(m_index, &nunchuk_override))
+  if (std::holds_alternative<Nunchuk::DataFormat>(manipulated_state.extension.data))
   {
-    if (std::holds_alternative<Nunchuk::DataFormat>(manipulated_state.extension.data))
-    {
-      const auto current_nunchuk = std::get<Nunchuk::DataFormat>(manipulated_state.extension.data);
-      nunchuk_override.SetAccel(current_nunchuk.GetAccel().value);
-    }
-    manipulated_state.extension.data = nunchuk_override;
+    auto nunchuk = std::get<Nunchuk::DataFormat>(manipulated_state.extension.data);
+    API::GetNunchuckButtonsManip().ApplyOverride(m_index, &nunchuk);
+    manipulated_state.extension.data = nunchuk;
   }
 
   m_battery_input_override = manipulated_state.battery.has_value();

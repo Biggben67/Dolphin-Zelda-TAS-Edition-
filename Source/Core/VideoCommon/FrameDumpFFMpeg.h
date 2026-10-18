@@ -50,7 +50,7 @@ public:
   void Stop();
   void DoState(PointerWrap&);
   bool IsStarted() const;
-  FrameState FetchState(u64 ticks, int frame_number) const;
+  FrameState FetchState(u64 ticks, int frame_number, int refresh_rate_divisor = 1) const;
 
 private:
   bool IsFirstFrameInCurrentFile() const;
@@ -83,7 +83,8 @@ private:
 inline FFMpegFrameDump::FFMpegFrameDump() = default;
 inline FFMpegFrameDump::~FFMpegFrameDump() = default;
 
-inline FrameState FFMpegFrameDump::FetchState(u64 ticks, int frame_number) const
+inline FrameState FFMpegFrameDump::FetchState(u64 ticks, int frame_number,
+                                              int refresh_rate_divisor) const
 {
   return {};
 }

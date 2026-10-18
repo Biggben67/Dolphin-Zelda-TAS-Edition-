@@ -9,16 +9,25 @@
 
 #include <QCheckBox>
 #include <QApplication>
+#include <QByteArray>
 #include <QClipboard>
 #include <QCoreApplication>
+#include <QDir>
+#include <QEvent>
 #include <QGuiApplication>
 #include <QGroupBox>
+#include <QFile>
+#include <QFileInfo>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QPushButton>
 #include <QRegion>
 #include <QScrollArea>
+#include <QSaveFile>
+#include <QScreen>
 #include <QStackedLayout>
 #include <QSlider>
 #include <QVBoxLayout>
@@ -27,12 +36,14 @@
 #include "Core/API/Events.h"
 #include "Core/API/Gui.h"
 #include "Core/Core.h"
+#include "Core/HW/CPU.h"
 #include "Core/System.h"
 #include "Scripting/ScriptList.h"
 #include "DolphinQt/Scripting/ScriptHardwareMeshWidget.h"
 
 static constexpr int POLL_INTERVAL_MS = 16;
 static constexpr int HOST_UPDATE_INTERVAL_MS = 33;
+static constexpr int GEOMETRY_SAVE_DELAY_MS = 250;
 
 // ARGB colors become rgba() QSS fragments; the raw style is appended last so it wins on conflict.
 static QString BuildStyleSheet(const std::optional<u32>& text_color,
@@ -90,13 +101,11 @@ ScriptWindowManager::ScriptWindowManager(QObject* parent) : QObject(parent)
     if (pending->exchange(true))
       return;
 
-    Core::RunOnCPUThread(system,
-                         [pending] {
-                           if (!Scripts::IsConstructing())
-                             API::GetEventHub().EmitEvent(API::Events::HostUpdate{});
-                           pending->store(false);
-                         },
-                         false);
+    system.GetCPU().AddCPUThreadJob([pending] {
+      if (!Scripts::IsConstructing())
+        API::GetEventHub().EmitEvent(API::Events::HostUpdate{});
+      pending->store(false);
+    });
   });
   m_host_update_timer.start(HOST_UPDATE_INTERVAL_MS);
 }
@@ -107,7 +116,155 @@ ScriptWindowManager::~ScriptWindowManager()
   API::GetGui().SetDetachedScriptTextInputFocused(false);
   API::GetGui().SetDetachedScriptWindowsPresent(false);
   for (auto& [id, mw] : m_windows)
+  {
+    SaveGeometry(mw);
     delete mw.window;
+  }
+}
+
+void ScriptWindowManager::ConfigureGeometryPersistence(ManagedWindow& managed,
+                                                       const std::string& path)
+{
+  const QString geometry_path = QString::fromStdString(path);
+  if (managed.geometry_path == geometry_path)
+    return;
+
+  managed.geometry_path = geometry_path;
+  if (!managed.geometry_save_timer)
+  {
+    managed.window->installEventFilter(this);
+    managed.geometry_save_timer = new QTimer(this);
+    managed.geometry_save_timer->setSingleShot(true);
+    const API::Gui::WidgetId id = managed.id;
+    connect(managed.geometry_save_timer, &QTimer::timeout, this, [this, id] {
+      const auto it = m_windows.find(id);
+      if (it != m_windows.end())
+        SaveGeometry(it->second);
+    });
+  }
+
+  if (geometry_path.isEmpty())
+    return;
+
+  QFile file(geometry_path);
+  if (!file.open(QIODevice::ReadOnly))
+    return;
+  const QJsonDocument document = QJsonDocument::fromJson(file.readAll());
+  if (!document.isObject())
+    return;
+  const QJsonObject object = document.object();
+
+  // Qt's native payload includes frame margins, DPI, and screen placement.
+  // Prefer it over reconstructing a top level window from client geometry.
+  const QString qt_geometry = object.value(QStringLiteral("qt_geometry")).toString();
+  if (!qt_geometry.isEmpty())
+  {
+    managed.applying_saved_geometry = true;
+    managed.window->createWinId();
+    const bool restored =
+        managed.window->restoreGeometry(QByteArray::fromBase64(qt_geometry.toLatin1()));
+    managed.applying_saved_geometry = false;
+    if (restored)
+    {
+      managed.observed_geometry = managed.window->saveGeometry();
+      return;
+    }
+  }
+
+  const int width = object.value(QStringLiteral("width")).toInt();
+  const int height = object.value(QStringLiteral("height")).toInt();
+  if (width <= 0 || height <= 0)
+    return;
+
+  QPoint top_left(object.value(QStringLiteral("x")).toInt(),
+                  object.value(QStringLiteral("y")).toInt());
+  const QString screen_name = object.value(QStringLiteral("screen")).toString();
+  QScreen* target_screen = nullptr;
+  for (QScreen* screen : QGuiApplication::screens())
+  {
+    if (screen->name() == screen_name)
+    {
+      target_screen = screen;
+      break;
+    }
+  }
+  if (!target_screen)
+    target_screen = QGuiApplication::primaryScreen();
+  if (target_screen && object.value(QStringLiteral("screen_relative")).toBool(true))
+    top_left += target_screen->geometry().topLeft();
+
+  managed.applying_saved_geometry = true;
+  managed.window->createWinId();
+  if (QWindow* handle = managed.window->windowHandle(); target_screen && handle)
+    handle->setScreen(target_screen);
+  managed.window->setGeometry(QRect(top_left, QSize(width, height)));
+  managed.applying_saved_geometry = false;
+  managed.observed_geometry = managed.window->saveGeometry();
+  SaveGeometry(managed);
+}
+
+void ScriptWindowManager::SaveGeometry(const ManagedWindow& managed) const
+{
+  if (!managed.window || managed.geometry_path.isEmpty() || managed.applying_saved_geometry)
+    return;
+
+  const QRect geometry = managed.window->geometry();
+  if (geometry.width() <= 0 || geometry.height() <= 0)
+    return;
+
+  QPoint top_left = geometry.topLeft();
+  QString screen_name;
+  if (const QScreen* screen = managed.window->screen())
+  {
+    screen_name = screen->name();
+    top_left -= screen->geometry().topLeft();
+  }
+
+  // Keep script-owned settings in the same document when updating geometry.
+  QJsonObject object;
+  QFile existing_file(managed.geometry_path);
+  if (existing_file.open(QIODevice::ReadOnly))
+  {
+    const QJsonDocument existing_document = QJsonDocument::fromJson(existing_file.readAll());
+    if (existing_document.isObject())
+      object = existing_document.object();
+  }
+  object.insert(QStringLiteral("version"), 1);
+  object.insert(QStringLiteral("x"), top_left.x());
+  object.insert(QStringLiteral("y"), top_left.y());
+  object.insert(QStringLiteral("width"), geometry.width());
+  object.insert(QStringLiteral("height"), geometry.height());
+  object.insert(QStringLiteral("screen"), screen_name);
+  object.insert(QStringLiteral("screen_relative"), !screen_name.isEmpty());
+  object.insert(QStringLiteral("qt_geometry"),
+                QString::fromLatin1(managed.window->saveGeometry().toBase64()));
+
+  const QFileInfo info(managed.geometry_path);
+  QDir().mkpath(info.absolutePath());
+  QSaveFile file(managed.geometry_path);
+  if (!file.open(QIODevice::WriteOnly))
+    return;
+  file.write(QJsonDocument(object).toJson(QJsonDocument::Indented));
+  file.commit();
+}
+
+bool ScriptWindowManager::eventFilter(QObject* watched, QEvent* event)
+{
+  const auto it = std::find_if(m_windows.begin(), m_windows.end(), [watched](const auto& entry) {
+    return entry.second.window == watched;
+  });
+  if (it == m_windows.end())
+    return QObject::eventFilter(watched, event);
+
+  ManagedWindow& managed = it->second;
+  if (!managed.geometry_path.isEmpty() && !managed.applying_saved_geometry)
+  {
+    if (event->type() == QEvent::Move || event->type() == QEvent::Resize)
+      managed.geometry_save_timer->start(GEOMETRY_SAVE_DELAY_MS);
+    else if (event->type() == QEvent::Close)
+      SaveGeometry(managed);
+  }
+  return QObject::eventFilter(watched, event);
 }
 
 void ScriptWindowManager::Sync()
@@ -127,7 +284,10 @@ void ScriptWindowManager::Sync()
     bool gone = std::none_of(snapshots.begin(), snapshots.end(),
                              [id = kv.first](const API::Gui::WindowInfo& s) { return s.id == id; });
     if (gone)
+    {
+      SaveGeometry(kv.second);
       delete kv.second.window;
+    }
     return gone;
   });
 
@@ -146,6 +306,7 @@ void ScriptWindowManager::Sync()
         cw->show();
         m_windows[snap.id] = ManagedWindow{snap.id, cw, {}, cw, nullptr, nullptr};
         it = m_windows.find(snap.id);
+        ConfigureGeometryPersistence(it->second, snap.geometry_path);
       }
       const u64 generation = gui.CanvasGeneration(snap.id);
       if (!it->second.canvas_generation_set || it->second.canvas_generation != generation)
@@ -462,6 +623,41 @@ void ScriptWindowManager::Sync()
       cit->second.control->setVisible(child.visible);
       if (cit->second.caption)
         cit->second.caption->setVisible(child.visible);
+    }
+
+    // Apply persisted geometry only after the complete widget tree exists.
+    // Restoring it before adding the canvas and controls lets Qt's layout pass
+    // resize the top-level window over the saved rectangle.
+    if (mw.root_layout)
+      mw.root_layout->activate();
+    if (const auto requested = gui.TakeWindowGeometryRequest(snap.id))
+    {
+      mw.requested_geometry =
+          QRect(requested->x, requested->y, requested->width, requested->height);
+      mw.geometry_restore_cycles = 20;
+    }
+    if (mw.requested_geometry && mw.geometry_restore_cycles > 0)
+    {
+      mw.window->setGeometry(*mw.requested_geometry);
+      --mw.geometry_restore_cycles;
+      if (mw.geometry_restore_cycles == 0)
+        mw.requested_geometry.reset();
+    }
+    const QRect current_rectangle = mw.window->geometry();
+    gui.ReportWindowGeometry(snap.id,
+                             {current_rectangle.x(), current_rectangle.y(), current_rectangle.width(),
+                              current_rectangle.height()});
+    ConfigureGeometryPersistence(mw, snap.geometry_path);
+    if (gui.TakeWindowGeometrySaveRequest(snap.id))
+      SaveGeometry(mw);
+    if (!mw.geometry_path.isEmpty() && !mw.applying_saved_geometry)
+    {
+      const QByteArray current_geometry = mw.window->saveGeometry();
+      if (current_geometry != mw.observed_geometry)
+      {
+        mw.observed_geometry = current_geometry;
+        mw.geometry_save_timer->start(GEOMETRY_SAVE_DELAY_MS);
+      }
     }
   }
   API::GetGui().SetDetachedScriptWindowsPresent(!m_windows.empty());
